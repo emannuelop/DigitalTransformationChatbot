@@ -1,5 +1,4 @@
 import scrapy
-from urllib.parse import urljoin
 
 class TitlesSpider(scrapy.Spider):
     name = "titles"
@@ -7,18 +6,9 @@ class TitlesSpider(scrapy.Spider):
     start_urls = ["https://www.gov.br/pt-br"]
 
     def parse(self, response):
-        # títulos da página atual
-        for t in response.css("a::text, h1::text, h2::text").getall():
-            t = t.strip()
+        # pega textos visíveis de links e cabeçalhos, limpa e emite
+        texts = response.css("a::text, h1::text, h2::text").getall()
+        for t in texts:
+            t = (t or "").strip()
             if t:
-                yield {"url": response.url, "title": t}
-
-        # segue até 20 links internos (para não exagerar no bloco 1)
-        count = 0
-        for href in response.css("a::attr(href)").getall():
-            if count >= 20:
-                break
-            href = href.strip()
-            if href and href.startswith("/"):
-                count += 1
-                yield response.follow(href, callback=self.parse)
+                yield {"title": t}

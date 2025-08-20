@@ -1,4 +1,0 @@
-streamlit==1.45.0
-scrapy==2.11.2
-requests==2.32.3
-sqlite-utils==3.36

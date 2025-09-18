@@ -1,11 +1,8 @@
-# etapa 01
 requests
 beautifulsoup4
 lxml
 pypdf
 ddgs
-
-# etapa 02
 pandas
 numpy
 scikit-learn
@@ -15,3 +12,7 @@ langdetect
 joblib
 tqdm
 sentence-transformers
+faiss-cpu
+transformers
+torch
+python-dotenv

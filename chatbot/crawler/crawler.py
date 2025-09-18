@@ -1,370 +1,278 @@
-import argparse
 import os
 import re
 import sqlite3
 import time
+import requests
+
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, List
-from urllib.parse import urljoin, urlparse, urlsplit, urlunsplit, parse_qsl, urlencode
-
-import requests
-from bs4 import BeautifulSoup, Comment
 from pypdf import PdfReader
 from requests.adapters import HTTPAdapter, Retry
 
-# ==========================
-# Constantes e diretórios
-# ==========================
-DATA_DIR = Path("data")
-SEEDS_DIR = Path("seeds")
+# ----------------------------
+# Paths fixos
+# ----------------------------
+BASE_DIR = Path(__file__).parent
+DATA_DIR = BASE_DIR / "data"
+SEEDS_DIR = BASE_DIR / "seeds"
 DATA_DIR.mkdir(exist_ok=True)
 SEEDS_DIR.mkdir(exist_ok=True)
 
 DB_PATH = os.environ.get("DB_PATH", str(DATA_DIR / "knowledge_base.db"))
-SEEDS_FILE = os.environ.get("SEEDS_FILE", str(SEEDS_DIR / "seeds.txt"))
+SEEDS_FILE_PT = SEEDS_DIR / "seeds_pt.txt"
+SEEDS_FILE_EN = SEEDS_DIR / "seeds_en.txt"
 
-USER_AGENT = "Mozilla/5.0 (compatible; TCC-Crawler/1.0; +https://example.com/bot)"
-HEADERS = {"User-Agent": USER_AGENT}
-RATE_DELAY = 1.0              # segundos entre requisições
-GET_TIMEOUT = 20              # timeout de GET
-HEAD_TIMEOUT = 15             # timeout de HEAD
+# ----------------------------
+# Parâmetros
+# ----------------------------
+USER_AGENT = "Mozilla/5.0 (compatible; TCC-Crawler/2.0; +https://example.com/bot)"
+RATE_DELAY = 1.0   # s entre requisições
+GET_TIMEOUT = 30   # s
 
-PDF_MIME_HINTS = ("application/pdf", "application/x-pdf", "binary/octet-stream")
+# Filtros mínimos de conteúdo
+MIN_WORDS = 80
+MIN_SCORE = 1
 
-# ignorar binários que não vamos extrair texto
-SKIP_BINARIES_RX = re.compile(
-    r"\.(jpg|jpeg|png|gif|bmp|svg|zip|rar|tar|gz|7z|mp4|mp3|pptx?|docx?)($|\?)",
-    re.IGNORECASE,
-)
-
-# --------------------------
-# Filtro de relevância suave
-# --------------------------
+# Palavras-chave (PT/EN) — filtro leve
 TERMS = [
-    # PT
     r"transforma[çc][aã]o digital",
     r"governo digital",
-    r"estrat[eé]gia (de )?transforma[çc][aã]o digital",
     r"setor p[úu]blico",
     r"servi[çc]os digitais",
-    r"gov\.br",
-    # EN
     r"digital transformation",
     r"digital government",
     r"public sector",
-    r"e-government",
+    r"digital services",
     r"digital strategy",
 ]
 TERMS_RX = [re.compile(t, re.IGNORECASE) for t in TERMS]
 
+# ----------------------------
+# Utilidades
+# ----------------------------
 def soft_score(text: str) -> int:
-    if not text:
-        return 0
-    return sum(1 for rx in TERMS_RX if rx.search(text))
+    return sum(1 for rx in TERMS_RX if rx.search(text or ""))
 
 def word_count(text: str) -> int:
     return len(re.findall(r"\w+", text or ""))
 
-# ==========================
-# URL helpers
-# ==========================
-def normalize_url(url: str) -> str:
-    """Remove fragmentos e parâmetros de tracking comuns para evitar duplicatas 'disfarçadas'."""
-    if not url:
-        return url
-    parts = urlsplit(url.strip())
-    # fragmento (#...)
-    parts = parts._replace(fragment="")
-    # limpa tracking
-    block = {"fbclid", "gclid"}
-    qs = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
-          if not k.lower().startswith("utm_") and k.lower() not in block]
-    parts = parts._replace(query=urlencode(qs, doseq=True))
-    # normaliza esquema/host para minúsculas
-    scheme = (parts.scheme or "").lower()
-    netloc = (parts.netloc or "").lower()
-    parts = parts._replace(scheme=scheme, netloc=netloc)
-    return urlunsplit(parts)
-
-# ==========================
-# Utilidades HTTP/DB/HTML
-# ==========================
 def make_session() -> requests.Session:
-    session = requests.Session()
+    s = requests.Session()
+    s.headers.update({"User-Agent": USER_AGENT})
     retries = Retry(
         total=3,
-        backoff_factor=0.8,
+        backoff_factor=0.7,
         status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=frozenset(["GET", "HEAD"]),
+        allowed_methods=frozenset(["GET"]),
         raise_on_status=False,
     )
     adapter = HTTPAdapter(max_retries=retries)
-    session.headers.update(HEADERS)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    return session
+    s.mount("http://", adapter)
+    s.mount("https://", adapter)
+    return s
 
-def init_db(path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(path)
+def ensure_table(conn: sqlite3.Connection) -> None:
     cur = conn.cursor()
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS documents (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            url TEXT UNIQUE,
-            content TEXT,
-            content_type TEXT,
-            fetched_at TEXT
+            url TEXT UNIQUE,           -- URL do PDF
+            lang TEXT,                 -- idioma da seed (pt/en)
+            detected_lang TEXT,        -- idioma detectado no texto
+            title TEXT,                -- título do PDF (metadata)
+            num_pages INTEGER,         -- nº de páginas
+            word_count INTEGER,        -- nº de palavras extraídas
+            soft_score INTEGER,        -- score de termos-chave
+            content TEXT,              -- texto extraído
+            content_type TEXT,         -- "pdf"
+            fetched_at TEXT            -- ISO-8601
         )
         """
     )
-    # índice explícito ajuda nas consultas futuras
+    # migrações idempotentes
+    cur.execute("PRAGMA table_info(documents)")
+    existing = {row[1] for row in cur.fetchall()}
+    for col, ddl in [
+        ("detected_lang", "TEXT"),
+        ("title", "TEXT"),
+        ("num_pages", "INTEGER"),
+        ("word_count", "INTEGER"),
+        ("soft_score", "INTEGER"),
+    ]:
+        if col not in existing:
+            cur.execute(f"ALTER TABLE documents ADD COLUMN {col} {ddl}")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_url ON documents(url)")
     conn.commit()
+
+def init_db(path: str) -> sqlite3.Connection:
+    conn = sqlite3.connect(path)
+    ensure_table(conn)
     return conn
 
-def load_seeds(path: str) -> List[str]:
-    if not os.path.exists(path):
-        return []
-    seeds: List[str] = []
+def load_seeds_file(path: Path, lang: str) -> list[tuple[str, str]]:
+    items: list[tuple[str, str]] = []
+    if not path.exists():
+        return items
     with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = normalize_url(line.strip())
-            if not line or line.startswith("#"):
-                continue
-            seeds.append(line)
-    return seeds
+        for raw in f:
+            url = raw.strip()
+            if url and not url.startswith("#"):
+                items.append((url, lang))
+    return items
 
-def is_pdf_suffix(url: str) -> bool:
-    return url.lower().endswith(".pdf")
-
-def head_content_type(session: requests.Session, url: str) -> str:
-    try:
-        r = session.head(url, timeout=HEAD_TIMEOUT, allow_redirects=True)
-        return (r.headers.get("Content-Type") or "").lower()
-    except Exception:
-        return ""
-
-def http_get(session: requests.Session, url: str, stream: bool = False) -> requests.Response:
-    r = session.get(url, timeout=GET_TIMEOUT, stream=stream, allow_redirects=True)
+def http_get_bytes(session: requests.Session, url: str) -> bytes:
+    # sem limite de tamanho: baixa tudo em memória
+    r = session.get(url, timeout=GET_TIMEOUT, stream=True, allow_redirects=True)
     r.raise_for_status()
-    return r
+    chunks: list[bytes] = []
+    for chunk in r.iter_content(chunk_size=128 * 1024):
+        if chunk:
+            chunks.append(chunk)
+    return b"".join(chunks)
 
-def visible_text_from_html(html: str) -> str:
-    soup = BeautifulSoup(html, "lxml")
-    for tag in soup(["script", "style", "noscript", "header", "footer", "nav", "aside"]):
-        tag.decompose()
-    for element in soup.find_all(string=lambda s: isinstance(s, Comment)):
-        element.extract()
-    parts: List[str] = []
-    for s in soup.find_all(string=True):
-        parent = getattr(s, "parent", None)
-        if parent and parent.name in {"style", "script", "head", "title", "meta", "[document]"}:
-            continue
-        st = s.strip()
-        if st:
-            parts.append(st)
-    return "\n".join(parts)
-
-def extract_pdf_text(raw: bytes) -> str:
+def extract_pdf(raw: bytes) -> tuple[str, int, str]:
+    """Retorna (texto_extraido, numero_de_paginas, titulo_pdf)."""
     from io import BytesIO
     try:
         with BytesIO(raw) as bio:
             reader = PdfReader(bio)
-            chunks: List[str] = []
+            parts: list[str] = []
             for page in reader.pages:
                 try:
-                    chunks.append(page.extract_text() or "")
+                    parts.append(page.extract_text() or "")
                 except Exception:
                     continue
-            return "\n".join(chunks).strip()
+            text = "\n".join(parts).strip()
+            num_pages = len(reader.pages) if reader.pages else 0
+            title = ""
+            try:
+                meta = getattr(reader, "metadata", None) or {}
+                title = (meta.get("/Title") or meta.get("Title") or "").strip()
+            except Exception:
+                pass
+            return text, num_pages, title
     except Exception:
-        return ""
+        return "", 0, ""
 
-def save_document(conn: sqlite3.Connection, url: str, content: str, content_type: str) -> None:
+# heurística simples PT/EN sem libs externas
+PT_STOP = {"de","da","do","dos","das","e","em","para","com","uma","um","que","por","não","como","ao","às","aos"}
+EN_STOP = {"the","of","and","to","in","for","with","on","as","by","an","a","that","is","are","from"}
+
+def detect_lang_simple(text: str) -> str:
+    t = (text or "").lower()
+    if not t:
+        return ""
+    score_pt = sum(1 for ch in t if ch in "áâãàéêíóôõúç") + sum(t.count(f" {w} ") for w in PT_STOP)
+    score_en = sum(t.count(f" {w} ") for w in EN_STOP)
+    if score_pt >= score_en + 1:
+        return "pt"
+    if score_en >= score_pt + 1:
+        return "en"
+    return "pt" if re.search(r"[ãõç]", t) else "en"
+
+def save_document(
+    conn: sqlite3.Connection,
+    url: str,
+    seed_lang: str,
+    detected_lang: str,
+    title: str,
+    num_pages: int,
+    wc: int,
+    sscore: int,
+    content: str,
+) -> None:
     cur = conn.cursor()
     cur.execute(
         """
-        INSERT OR REPLACE INTO documents (url, content, content_type, fetched_at)
-        VALUES (?,?,?,?)
+        INSERT OR REPLACE INTO documents
+        (url, lang, detected_lang, title, num_pages, word_count, soft_score,
+         content, content_type, fetched_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
         """,
-        (url, content, content_type, datetime.now(timezone.utc).isoformat()),
+        (
+            url,
+            seed_lang,
+            detected_lang,
+            title or None,
+            num_pages,
+            wc,
+            sscore,
+            content,
+            "pdf",
+            datetime.now(timezone.utc).isoformat(),
+        ),
     )
     conn.commit()
 
-def should_enqueue(link: str, base_host: str, same_domain: bool) -> bool:
-    link = normalize_url(link)
-    if not link.startswith(("http://", "https://")):
-        return False
-    if SKIP_BINARIES_RX.search(link):
-        return False
-    host = urlparse(link).hostname or ""
-    return (host == base_host) if same_domain else True
+# ----------------------------
+# Núcleo (PDF-only)
+# ----------------------------
+def process_pdf(session: requests.Session, conn: sqlite3.Connection, url: str, seed_lang: str) -> None:
+    try:
+        raw = http_get_bytes(session, url)
+    except Exception as e:
+        print(f"[ERRO] GET falhou: {url} -> {e}")
+        return
 
-# ==========================
-# Núcleo
-# ==========================
-def process_url_and_discover(
-    session: requests.Session,
-    conn: sqlite3.Connection,
-    url: str,
-    same_domain: bool,
-    min_score: int,
-    min_words: int,
-) -> List[str]:
-    url = normalize_url(url)
-    base_host = urlparse(url).hostname or ""
+    text, num_pages, title = extract_pdf(raw)
+    if not text:
+        print(f"[SKIP] PDF sem texto extraível: {url}")
+        return
 
-    # 1) PDF (sufixo)
-    if is_pdf_suffix(url):
-        resp = http_get(session, url, stream=True)
-        content = extract_pdf_text(resp.content)
-        if content and soft_score(content) >= min_score and word_count(content) >= min_words:
-            save_document(conn, url, content, "pdf")
-            print(f"[OK] PDF salvo: {url}")
-        else:
-            print(f"[SKIP] PDF filtrado: {url}")
-        return []
+    wc = word_count(text)
+    sscore = soft_score(text)
+    if wc < MIN_WORDS or sscore < MIN_SCORE:
+        print(f"[SKIP] PDF filtrado por conteúdo: {url}")
+        return
 
-    # 2) PDF (HEAD)
-    ct = head_content_type(session, url)
-    if any(hint in ct for hint in PDF_MIME_HINTS):
-        resp = http_get(session, url, stream=True)
-        content = extract_pdf_text(resp.content)
-        if content and soft_score(content) >= min_score and word_count(content) >= min_words:
-            save_document(conn, url, content, "pdf")
-            print(f"[OK] PDF salvo (via HEAD): {url}")
-        else:
-            print(f"[SKIP] PDF filtrado (via HEAD): {url}")
-        return []
+    detected = detect_lang_simple(text)
 
-    # 3) HTML
-    resp = http_get(session, url, stream=False)
-    html = resp.text
-    text = visible_text_from_html(html)
-    if soft_score(text) >= min_score and word_count(text) >= min_words:
-        save_document(conn, url, text, "html")
-        print(f"[OK] HTML salvo: {url}")
-    else:
-        print(f"[SKIP] HTML filtrado: {url}")
+    save_document(
+        conn=conn,
+        url=url,
+        seed_lang=seed_lang,
+        detected_lang=detected,
+        title=title,
+        num_pages=num_pages,
+        wc=wc,
+        sscore=sscore,
+        content=text,
+    )
+    print(f"[OK] PDF salvo [{seed_lang}→{detected} | pgs={num_pages} | wc={wc} | score={sscore}]: {url}")
 
-    soup = BeautifulSoup(html, "lxml")
-    discovered: List[str] = []
-    for a in soup.find_all("a", href=True):
-        link = normalize_url(urljoin(url, a["href"]))
-        if should_enqueue(link, base_host, same_domain):
-            discovered.append(link)
-    return list(dict.fromkeys(discovered))
-
-def crawl(
-    start_urls: Iterable[str],
-    same_domain: bool = False,
-    min_score: int = 1,
-    min_words: int = 80,
-    max_pages: int = 100,
-    max_new_per_page: int = 1,
-) -> None:
+def crawl_pdf_only(seeds: list[tuple[str, str]]) -> None:
     conn = init_db(DB_PATH)
     session = make_session()
 
-    seeds_q: List[str] = list(dict.fromkeys(normalize_url(u) for u in start_urls))
-    disc_q: List[str] = []
+    # de-dup por URL mantendo o 1º idioma de seed
+    unique: dict[str, str] = {}
+    for url, lang in seeds:
+        if url not in unique:
+            unique[url] = lang
 
-    visited: set[str] = set()
-    processed_discovered = 0
-
-    print(
-        f"Iniciando crawl | same_domain={same_domain} | "
-        f"sementes={len(seeds_q)} | max_pages_descobertos={max_pages or '∞'} | "
-        f"max_new_per_page={max_new_per_page} | min_score={min_score} | min_words={min_words}"
-    )
-
-    while seeds_q or disc_q:
-        from_discovered = False
-        if seeds_q:
-            url = seeds_q.pop(0)
-        else:
-            if max_pages and processed_discovered >= max_pages:
-                print(f"[STOP] Limite de descobertos atingido ({processed_discovered}/{max_pages}).")
-                break
-            url = disc_q.pop(0)
-            from_discovered = True
-
-        url = normalize_url(url)
-        if url in visited:
-            continue
-        visited.add(url)
-
+    print(f"Iniciando (PDF-only). Seeds únicas: {len(unique)}")
+    for url, seed_lang in unique.items():
         try:
-            new_links = process_url_and_discover(
-                session=session,
-                conn=conn,
-                url=url,
-                same_domain=same_domain,
-                min_score=min_score,
-                min_words=min_words,
-            )
-
-            if max_new_per_page > 0:
-                new_links = new_links[:max_new_per_page]
-
-            for link in new_links:
-                if link not in visited and (link not in seeds_q) and (link not in disc_q):
-                    disc_q.append(link)
-
-        except requests.RequestException as e:
-            print(f"[ERRO] Requisição falhou: {url} -> {e}")
+            process_pdf(session, conn, url, seed_lang)
         except Exception as e:
             print(f"[ERRO] Falha ao processar: {url} -> {e}")
-
-        if from_discovered:
-            processed_discovered += 1
-
         time.sleep(RATE_DELAY)
 
     conn.close()
-    print(
-        f"Concluído. Visitados: {len(visited)} | "
-        f"Descobertos processados: {processed_discovered} | DB: {DB_PATH}"
-    )
+    print(f"Concluído. Processados: {len(unique)} | DB: {DB_PATH}")
 
-# ==========================
-# CLI
-# ==========================
+# ----------------------------
+# Execução direta
+# ----------------------------
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Crawler (sementes sempre; descobertos com limite leve) para HTML + PDF -> SQLite (data/knowledge_base.db)"
-    )
-    parser.add_argument(
-        "--same-domain",
-        type=lambda v: str(v).lower() in {"1", "true", "t", "yes", "y"},
-        default=False,
-        help="Se True, só segue links no mesmo domínio da página atual (padrão: False).",
-    )
-    parser.add_argument("--min-score", type=int, default=1,
-                        help="Pontuação mínima de relevância (padrão: 1).")
-    parser.add_argument("--min-words", type=int, default=80,
-                        help="Mínimo de palavras no texto (padrão: 80).")
-    parser.add_argument("--max-pages", type=int, default=100,
-                        help="Teto de páginas processadas para LINKS DESCOBERTOS (0 = sem limite).")
-    parser.add_argument("--max-new-per-page", type=int, default=1,
-                        help="Máximo de novos links descobertos por página (padrão: 1).")
-
-    args = parser.parse_args()
-    seeds = load_seeds(SEEDS_FILE)
+    seeds_pt = load_seeds_file(SEEDS_FILE_PT, "pt")
+    seeds_en = load_seeds_file(SEEDS_FILE_EN, "en")
+    seeds = seeds_pt + seeds_en
     if not seeds:
-        print("Nenhuma semente encontrada em seeds/seeds.txt. Rode primeiro: python seeds/seeds_finder.py")
+        print("Nenhuma seed encontrada. Gere primeiro com: python seeds_finder.py")
         return
-
-    crawl(
-        seeds,
-        same_domain=args.same_domain,
-        min_score=args.min_score,
-        min_words=args.min_words,
-        max_pages=args.max_pages,
-        max_new_per_page=args.max_new_per_page,
-    )
+    crawl_pdf_only(seeds)
 
 if __name__ == "__main__":
     main()

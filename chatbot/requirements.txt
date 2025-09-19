@@ -16,3 +16,5 @@ faiss-cpu
 transformers
 torch
 python-dotenv
+streamlit
+faiss-cpu

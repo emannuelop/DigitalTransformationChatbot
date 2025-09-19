@@ -1,34 +1,71 @@
-# chatbot/ml/llm_backends.py
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, List, Dict, Any
 import requests
 
 @dataclass
 class GenerationConfig:
     temperature: float = 0.2
     top_p: float = 0.9
-    max_tokens: int = 512
-    stop: Optional[list[str]] = None
+    max_tokens: int = 800           # AUMENTA p/ caber resposta
+    stop: Optional[List[str]] = None
+    timeout_s: int = 300
+    retries: int = 2
+    backoff_s: float = 1.5
 
-class OllamaBackend:
-    def __init__(self, model: str = "phi4-mini:latest", host: str = "http://localhost:11434"):
+class LMStudioBackend:
+    def __init__(self, model: str, host: str):
         self.model = model
-        self.url = f"{host}/api/generate"
+        self.base = host.rstrip("/")
+        self.url = f"{self.base}/v1/chat/completions"
+        self.models_url = f"{self.base}/v1/models"
 
-    def generate(self, prompt: str, cfg: GenerationConfig) -> str:
+    def health(self) -> Dict[str, Any]:
+        try:
+            r = requests.get(self.models_url, timeout=8)
+            if not r.ok:
+                return {"error": f"HTTP {r.status_code}", "detail": r.text}
+            return r.json()
+        except Exception as e:
+            return {"error": str(e)}
+
+    def generate(self, prompt: str, system: Optional[str] = None,
+                 cfg: GenerationConfig = GenerationConfig()) -> str:
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
         payload = {
             "model": self.model,
-            "prompt": prompt,
-            "stream": False,  # desliga streaming: retorna um único JSON
-            "options": {
-                "temperature": cfg.temperature,
-                "top_p": cfg.top_p,
-                "num_predict": cfg.max_tokens,
-            }
+            "messages": messages,
+            "temperature": cfg.temperature,
+            "top_p": cfg.top_p,
+            "max_tokens": cfg.max_tokens,
         }
         if cfg.stop:
-            payload["stop"] = cfg.stop
-        r = requests.post(self.url, json=payload, timeout=180)
-        r.raise_for_status()
-        data = r.json()
-        return data.get("response", "").strip()
+            payload["stop"] = cfg.stop  # <-- garante que stop vai
+
+        last_err = None
+        for _ in range(max(1, cfg.retries)):
+            try:
+                r = requests.post(self.url, json=payload, timeout=cfg.timeout_s)
+                if r.ok:
+                    data = r.json()
+                    msg = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    if not msg:
+                        msg = data.get("choices", [{}])[0].get("text", "")
+                    return (msg or "").strip()
+                else:
+                    try:
+                        detail = r.json()
+                    except Exception:
+                        detail = r.text
+                    last_err = RuntimeError(f"LM Studio error {r.status_code}: {detail}")
+            except requests.RequestException as e:
+                last_err = RuntimeError(f"LM Studio connection error: {e}")
+            # pequeno backoff
+            import time; time.sleep(cfg.backoff_s)
+
+        if last_err:
+            raise last_err
+        return ""

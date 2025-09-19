@@ -1,3 +1,4 @@
+# chatbot/ml/build_index.py
 import numpy as np
 import faiss
 from pathlib import Path
@@ -9,12 +10,12 @@ def main():
     assert Path(EMB_NPY).exists(), f"Embeddings não encontrados: {EMB_NPY}"
     assert Path(MAPPING_PARQUET).exists(), f"Mapping não encontrado: {MAPPING_PARQUET}"
 
-    embs = np.load(EMB_NPY)  # (N, D) float32
-    df = pd.read_parquet(MAPPING_PARQUET)
+    embs = np.load(EMB_NPY)                     # (N, D) float32
+    df = pd.read_parquet(MAPPING_PARQUET)       # valida alinhamento
     assert len(df) == embs.shape[0], f"Linhas mapping ({len(df)}) != embeddings ({embs.shape[0]})"
 
     dim = embs.shape[1]
-    faiss.normalize_L2(embs)
+    faiss.normalize_L2(embs)                    # deixa unit-norm (para IP ~ cos)
     index = faiss.IndexFlatIP(dim)
     index.add(embs.astype(np.float32))
 

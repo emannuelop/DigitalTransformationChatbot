@@ -1,37 +1,46 @@
 import random
 import time
-
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from ddgs import DDGS
 
-# ---------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------
 SEEDS_DIR = Path(__file__).parent
-SEEDS_FILE_PT = SEEDS_DIR / "seeds_pt.txt"
-SEEDS_FILE_EN = SEEDS_DIR / "seeds_en.txt"
+SEEDS_FILE = SEEDS_DIR / "seeds_pt.txt"
+SEEDS_DIR.mkdir(parents=True, exist_ok=True)
 
-# ---------------------------------------------------------------------
-# Consultas padrão (PDF-only)
-# ---------------------------------------------------------------------
 QUERIES_PT = [
+    # Geral
     '"transformação digital" filetype:pdf',
     '"estratégia de transformação digital" filetype:pdf',
-    '"transformação digital setor público" filetype:pdf',
-    '"inovação tecnológica" transformação digital filetype:pdf',
+    '"indústria 4.0" transformação digital filetype:pdf',
+    '"maturidade digital" filetype:pdf',
+    '"mapa de jornada digital" filetype:pdf',
+    '"roadmap de transformação digital" filetype:pdf',
+    '"capacidade digital" organização filetype:pdf',
+    '"case" "transformação digital" filetype:pdf',
+    '"indicadores de transformação digital" filetype:pdf',
+    '"pequenas e médias empresas" "transformação digital" filetype:pdf',
+
+    # Setor público
+    '"governo digital" filetype:pdf',
+    '"estratégia de governo digital" filetype:pdf',
+    '"administração pública" "transformação digital" filetype:pdf',
+    '"setor público" "transformação digital" filetype:pdf',
+    '"serviços públicos digitais" filetype:pdf',
+    '"cidades inteligentes" "transformação digital" filetype:pdf',
+    '"transformação digital" "gestão pública" filetype:pdf',
+    '"transformação digital" "políticas públicas" filetype:pdf',
+    '"governança digital" setor público filetype:pdf',
+    '"interoperabilidade" "transformação digital" governo filetype:pdf',
+    '"dados abertos" "transformação digital" filetype:pdf',
+    '"gov.br" transformação digital filetype:pdf',
+
+    # Áreas específicas
+    '"saúde digital" "transformação digital" filetype:pdf',
+    '"educação digital" "transformação digital" filetype:pdf',
+    '"justiça digital" "transformação digital" filetype:pdf',
 ]
 
-QUERIES_EN = [
-    '"digital transformation" filetype:pdf',
-    '"digital transformation strategy" filetype:pdf',
-    '"digital transformation public sector" filetype:pdf',
-    '"case study" "digital transformation" filetype:pdf',
-]
-
-# ---------------------------------------------------------------------
-# Blocklist simples
-# ---------------------------------------------------------------------
 BLOCKED_HOST_SUFFIXES = {
     "pinterest.com", "br.pinterest.com",
     "facebook.com", "m.facebook.com", "web.facebook.com",
@@ -41,24 +50,28 @@ BLOCKED_HOST_SUFFIXES = {
     "reddit.com", "www.reddit.com", "discord.com",
 }
 
-# ---------------------------------------------------------------------
-# Utilidades
-# ---------------------------------------------------------------------
+HEAD_CHECK_IF_NEEDED = False
+
+# =============================================================================
+# Utils
+# =============================================================================
 def normalize(url: str) -> str:
     if not url:
         return url
     parts = urlsplit(url.strip())
     parts = parts._replace(fragment="")
 
-    # limpa tracking
     blocked_params = {"fbclid", "gclid"}
-    qs = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
-          if not k.lower().startswith("utm_") and k.lower() not in blocked_params]
+    qs = [
+        (k, v)
+        for k, v in parse_qsl(parts.query, keep_blank_values=True)
+        if not k.lower().startswith("utm_") and k.lower() not in blocked_params
+    ]
     parts = parts._replace(query=urlencode(qs, doseq=True))
-
-    # normaliza esquema/host
-    parts = parts._replace(scheme=(parts.scheme or "").lower(),
-                           netloc=(parts.netloc or "").lower())
+    parts = parts._replace(
+        scheme=(parts.scheme or "").lower(),
+        netloc=(parts.netloc or "").lower(),
+    )
 
     cleaned = urlunsplit(parts)
     base = f"{parts.scheme}://{parts.netloc}"
@@ -90,10 +103,12 @@ def save_merged(path: Path, new_items: set[str]) -> None:
     merged, seen = [], set()
     for u in old_urls:
         if u not in seen:
-            merged.append(u); seen.add(u)
+            merged.append(u)
+            seen.add(u)
     for u in sorted(new_items):
         if u not in seen:
-            merged.append(u); seen.add(u)
+            merged.append(u)
+            seen.add(u)
 
     with open(path, "w", encoding="utf-8") as f:
         if header:
@@ -101,70 +116,73 @@ def save_merged(path: Path, new_items: set[str]) -> None:
         for u in merged:
             f.write(u + "\n")
 
-def is_pdf_url(u: str) -> bool:
-    return u.lower().endswith(".pdf")
-
-def allowed_host(u: str) -> bool:
-    host = (urlsplit(u).netloc or "").lower()
+def allowed_host(url: str) -> bool:
+    host = (urlsplit(url).netloc or "").lower()
     if not host:
         return False
-    for suf in BLOCKED_HOST_SUFFIXES:
-        if host == suf or host.endswith("." + suf):
-            return False
-    return True
+    return not any(host == suf or host.endswith("." + suf) for suf in BLOCKED_HOST_SUFFIXES)
 
-def ddg_search(query: str, lang: str, limit: int = 15) -> list[str]:
-    region = "br-pt" if lang == "pt" else "wt-wt"
+def is_pdf_like(url: str) -> bool:
+    return ".pdf" in (urlsplit(url).path or "").lower()
+
+def confirm_pdf_head(url: str) -> bool:
+    if not HEAD_CHECK_IF_NEEDED:
+        return True
+    try:
+        import requests
+        r = requests.head(url, allow_redirects=True, timeout=10)
+        ct = (r.headers.get("Content-Type") or "").lower()
+        return "application/pdf" in ct
+    except Exception:
+        return False
+
+def ddg_search_pt(query: str, limit: int = 20) -> list[str]:
     out: list[str] = []
     with DDGS() as ddgs:
-        for r in ddgs.text(query, region=region, safesearch="moderate", max_results=limit):
+        for r in ddgs.text(query, region="br-pt", safesearch="moderate", max_results=limit):
             href = r.get("href") or r.get("link") or r.get("url")
             if href:
                 out.append(href)
     return out[:limit]
 
-# ---------------------------------------------------------------------
-# Execução direta
-# ---------------------------------------------------------------------
 def main() -> None:
-    existing_pt = load_existing(SEEDS_FILE_PT)
-    existing_en = load_existing(SEEDS_FILE_EN)
-    new_pt: set[str] = set()
-    new_en: set[str] = set()
+    existing = load_existing(SEEDS_FILE)
+    collected: set[str] = set()
 
-    all_queries = [("pt", QUERIES_PT, existing_pt, new_pt, SEEDS_FILE_PT),
-                   ("en", QUERIES_EN, existing_en, new_en, SEEDS_FILE_EN)]
+    total = len(QUERIES_PT)
+    print(f"Iniciando busca PT-BR (PDFs). Consultas: {total}\nArquivo de saída: {SEEDS_FILE}\n")
 
-    step, total = 0, sum(len(qs) for _, qs, *_ in all_queries)
+    for i, q in enumerate(QUERIES_PT, start=1):
+        try:
+            results = ddg_search_pt(q)
+        except Exception as e:
+            print(f"[WARN] Falha na busca '{q}': {e}")
+            results = []
 
-    for lang, queries, existing, collected, out_path in all_queries:
-        for q in queries:
-            step += 1
-            try:
-                results = ddg_search(q, lang)
-            except Exception as e:
-                print(f"[WARN] Falha na busca '{q}' ({lang}): {e}")
-                results = []
-            added = 0
-            for url in results:
-                u = normalize(url)
-                if not u or not is_pdf_url(u):
-                    continue
-                if not allowed_host(u):
-                    continue
-                if u in existing or u in collected:
-                    continue
-                collected.add(u)
-                added += 1
-            print(f"[OK] {step}/{total} '{q}' [{lang}] -> +{added} PDFs")
-            time.sleep(1.0 + random.uniform(0, 0.4))
-        if collected:
-            save_merged(out_path, collected)
+        added = 0
+        for raw in results:
+            u = normalize(raw)
+            if not u or not allowed_host(u):
+                continue
+            if not is_pdf_like(u):
+                continue
+            if not confirm_pdf_head(u):
+                continue
+            if u in existing or u in collected:
+                continue
+
+            collected.add(u)
+            added += 1
+
+        print(f"[OK] {i}/{total} '{q}' -> +{added} PDFs")
+        time.sleep(1.0 + random.uniform(0, 0.4))  # educado com o buscador
+
+    if collected:
+        save_merged(SEEDS_FILE, collected)
 
     print("\nResumo final:")
-    print(f"  PT: +{len(new_pt)} PDFs novos -> {SEEDS_FILE_PT}")
-    print(f"  EN: +{len(new_en)} PDFs novos -> {SEEDS_FILE_EN}")
-    if not new_pt and not new_en:
+    print(f"  PT: +{len(collected)} PDFs novos -> {SEEDS_FILE}")
+    if not collected:
         print("Nenhum PDF novo encontrado.")
 
 if __name__ == "__main__":

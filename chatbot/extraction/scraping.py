@@ -20,7 +20,7 @@ SEEDS_DIR.mkdir(exist_ok=True)
 DB_PATH       = os.environ.get("DB_PATH", str(DATA_DIR / "knowledge_base.db"))
 SEEDS_FILE_PT = SEEDS_DIR / "seeds_pt.txt" 
 
-USER_AGENT  = "Mozilla/5.0 (compatible; TCC-Crawler/3.2; +https://example.com/bot)"
+USER_AGENT  = "Mozilla/5.0 (compatible; TCC-Scraping/3.2; +https://example.com/bot)"
 GET_TIMEOUT = 30          
 CHUNK_SIZE  = 128 * 1024   
 RATE_DELAY  = 1.0          

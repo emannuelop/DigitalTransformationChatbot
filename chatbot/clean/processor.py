@@ -16,7 +16,7 @@ from tqdm import tqdm
 from unidecode import unidecode
 
 BASE_DIR: Path = Path(__file__).resolve().parent.parent         
-RAW_DB:   Path = BASE_DIR / "crawler" / "data" / "knowledge_base.db"
+RAW_DB:   Path = BASE_DIR / "extraction" / "data" / "knowledge_base.db"
 
 DATA_DIR: Path = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
@@ -63,7 +63,7 @@ def setup_logging(level: str = "INFO") -> None:
 
 def ensure_raw_db() -> None:
     if not RAW_DB.exists():
-        raise FileNotFoundError(f"DB bruto não encontrado: {RAW_DB}. Rode o crawler antes.")
+        raise FileNotFoundError(f"DB bruto não encontrado: {RAW_DB}. Rode o scraping antes.")
 
 def basic_clean(text: str) -> str:
     if not text:

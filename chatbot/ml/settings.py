@@ -28,8 +28,10 @@ LMSTUDIO_MODEL: str = "microsoft/phi-4-mini-reasoning"
 
 GEN_TEMPERATURE: float = 0.2
 GEN_TOP_P: float       = 0.9
-GEN_MAX_TOKENS: int    = 900
-GEN_TIMEOUT_S: int     = 300
+GEN_MAX_TOKENS: int    = 512
+GEN_TIMEOUT_S: int     = 15
+GEN_RETRIES: int       = 1
+GEN_BACKOFF_S: float   = 0.5
 GEN_STOP: list[str] | None = None  
 
 FORCE_PT_BR: bool = True   

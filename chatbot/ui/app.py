@@ -52,20 +52,29 @@ def configure_runtime():
     top_k = st.sidebar.slider("TOP_K (chunks)", min_value=1, max_value=8, value=int(cfg.TOP_K), step=1)
 
     # Geração (LLM)
-    temperature = st.sidebar.slider("Temperature", 0.0, 1.0, 0.2, 0.05)
-    top_p = st.sidebar.slider("Top-p", 0.1, 1.0, 0.9, 0.05)
-    max_tokens = st.sidebar.slider("Máx. tokens de saída", 128, 4096, 1200, 64)
+    temperature = st.sidebar.slider("Temperature", 0.0, 1.0, float(cfg.GEN_TEMPERATURE), 0.05)
+    top_p = st.sidebar.slider("Top-p", 0.1, 1.0, float(cfg.GEN_TOP_P), 0.05)
+    max_tokens = st.sidebar.slider("Máx. tokens de saída", 128, 4096, int(cfg.GEN_MAX_TOKENS), 64)
+    timeout_s = st.sidebar.slider("Tempo máx. de geração (s)", 5, 120, int(cfg.GEN_TIMEOUT_S), 5)
+    retries = st.sidebar.slider("Tentativas (retries)", 1, 3, int(cfg.GEN_RETRIES), 1)
 
     # Aplicar nos settings globais (usados pelo pipeline)
     cfg.LMSTUDIO_HOST = lm_host
     cfg.LMSTUDIO_MODEL = lm_model
     cfg.TOP_K = int(top_k)
+    cfg.GEN_TEMPERATURE = float(temperature)
+    cfg.GEN_TOP_P = float(top_p)
+    cfg.GEN_MAX_TOKENS = int(max_tokens)
+    cfg.GEN_TIMEOUT_S = int(timeout_s)
+    cfg.GEN_RETRIES = int(retries)
 
     # Guardar overrides de geração p/ answer_with_cfg()
     st.session_state["_gen_overrides"] = dict(
         temperature=temperature,
         top_p=top_p,
         max_tokens=max_tokens,
+        timeout_s=timeout_s,
+        retries=retries,
     )
 
 def call_rag(question: str) -> tuple[str, list[str]]:

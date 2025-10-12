@@ -81,9 +81,9 @@ def answer(question: str, k: int = TOP_K) -> str:
     user_prompt, urls = build_prompt(question, ctx)
 
     llm = LMStudioBackend(model=LMSTUDIO_MODEL, host=LMSTUDIO_HOST)
-    cfg = GenerationConfig(temperature=0.2, top_p=0.9, max_tokens=1200, timeout_s=300)
+    gen_cfg = GenerationConfig()
 
-    text = llm.generate(user_prompt, system=SYS_PT, cfg=cfg)
+    text = llm.generate(user_prompt, system=SYS_PT, cfg=gen_cfg)
     text = _pt_br_cleanup(_strip_think(text))
 
     if not text:
@@ -96,7 +96,13 @@ def answer(question: str, k: int = TOP_K) -> str:
 def answer_with_cfg(question: str, gen_overrides: dict | None = None, k: int = TOP_K) -> str:
     """
     Igual ao answer(), mas aceita overrides de geração:
-      gen_overrides = {"temperature": float, "top_p": float, "max_tokens": int}
+            gen_overrides = {
+          "temperature": float,
+          "top_p": float,
+          "max_tokens": int,
+          "timeout_s": int,
+          "retries": int,
+      }
     """
     index, mapping = load_search()
     ctx = search(index, mapping, question, k=k)
@@ -104,22 +110,24 @@ def answer_with_cfg(question: str, gen_overrides: dict | None = None, k: int = T
 
     llm = LMStudioBackend(model=LMSTUDIO_MODEL, host=LMSTUDIO_HOST)
 
-    # Defaults
-    cfg = GenerationConfig(
-        temperature=0.2,
-        top_p=0.9,
-        max_tokens=1200,
-        timeout_s=300,
-        stop=None,
-    )
+    # Defaults carregados de chatbot.ml.settings
+    gen_cfg = GenerationConfig()
+
     # Overrides vindos da UI (se existirem)
     if gen_overrides:
-        if "temperature" in gen_overrides: cfg.temperature = float(gen_overrides["temperature"])
-        if "top_p" in gen_overrides:       cfg.top_p       = float(gen_overrides["top_p"])
-        if "max_tokens" in gen_overrides:  cfg.max_tokens  = int(gen_overrides["max_tokens"])
+        if "temperature" in gen_overrides:
+            gen_cfg.temperature = float(gen_overrides["temperature"])
+        if "top_p" in gen_overrides:
+            gen_cfg.top_p = float(gen_overrides["top_p"])
+        if "max_tokens" in gen_overrides:
+            gen_cfg.max_tokens = int(gen_overrides["max_tokens"])
+        if "timeout_s" in gen_overrides:
+            gen_cfg.timeout_s = int(gen_overrides["timeout_s"])
+        if "retries" in gen_overrides:
+            gen_cfg.retries = int(gen_overrides["retries"])
 
     # Primeira tentativa
-    text = llm.generate(user_prompt, system=SYS_PT, cfg=cfg)
+    text = llm.generate(user_prompt, system=SYS_PT, cfg=gen_cfg)
     text = _strip_think(text)
     text = _pt_br_cleanup(text)
 
@@ -130,7 +138,7 @@ def answer_with_cfg(question: str, gen_overrides: dict | None = None, k: int = T
             + "\n\nATENÇÃO: NÃO use <think> e NÃO mostre raciocínio."
             + " Forneça apenas a resposta final, em pt-BR, com um ou mais parágrafos."
         )
-        text = llm.generate(fallback_user, system=SYS_PT, cfg=cfg)
+        text = llm.generate(fallback_user, system=SYS_PT, cfg=gen_cfg)
         text = _strip_think(text)
         text = _pt_br_cleanup(text)
 

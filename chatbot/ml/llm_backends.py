@@ -1,35 +1,23 @@
-from dataclasses import dataclass
+from __future__ import annotations
+from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
+import time
 import requests
-from . import settings
 
 @dataclass
 class GenerationConfig:
-    temperature: Optional[float] = None
-    top_p: Optional[float] = None
-    max_tokens: Optional[int] = None        # AUMENTA p/ caber resposta
+    temperature: float = 0.2
+    top_p: float = 0.9
+    max_tokens: int = 600
     stop: Optional[List[str]] = None
-    timeout_s: Optional[int] = None
-    retries: Optional[int] = None
-    backoff_s: Optional[float] = None
-
-    def __post_init__(self) -> None:
-        if self.temperature is None:
-            self.temperature = settings.GEN_TEMPERATURE
-        if self.top_p is None:
-            self.top_p = settings.GEN_TOP_P
-        if self.max_tokens is None:
-            self.max_tokens = settings.GEN_MAX_TOKENS
-        if self.timeout_s is None:
-            self.timeout_s = settings.GEN_TIMEOUT_S
-        if self.retries is None:
-            self.retries = settings.GEN_RETRIES
-        if self.backoff_s is None:
-            self.backoff_s = settings.GEN_BACKOFF_S
-        if self.stop is None and settings.GEN_STOP:
-            self.stop = list(settings.GEN_STOP)
+    timeout_s: int = 240
+    retries: int = 2
+    backoff_s: float = 1.5
 
 class LMStudioBackend:
+    """
+    Cliente mínimo para /v1/chat/completions do LM Studio.
+    """
     def __init__(self, model: str, host: str):
         self.model = model
         self.base = host.rstrip("/")
@@ -45,6 +33,24 @@ class LMStudioBackend:
         except Exception as e:
             return {"error": str(e)}
 
+    def warm_up(self, timeout_s: int = 40) -> None:
+        """
+        Dispara um prompt curtíssimo só para carregar o modelo (cold start).
+        Ignora erros silenciosamente para não travar o fluxo.
+        """
+        try:
+            payload = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": "ok"}],
+                "temperature": 0.0,
+                "top_p": 1.0,
+                "max_tokens": 1,
+                "stream": False,
+            }
+            requests.post(self.url, json=payload, timeout=timeout_s)
+        except Exception:
+            pass
+
     def generate(self, prompt: str, system: Optional[str] = None,
                  cfg: GenerationConfig = GenerationConfig()) -> str:
         messages = []
@@ -58,22 +64,15 @@ class LMStudioBackend:
             "temperature": cfg.temperature,
             "top_p": cfg.top_p,
             "max_tokens": cfg.max_tokens,
+            "stream": False,
         }
         if cfg.stop:
-            payload["stop"] = cfg.stop  # <-- garante que stop vai
+            payload["stop"] = cfg.stop
 
         last_err = None
-        attempts = max(1, int(cfg.retries or 1))
-        connect_timeout = min(8, cfg.timeout_s) if cfg.timeout_s else 8
-        request_timeout = max(1, cfg.timeout_s or settings.GEN_TIMEOUT_S)
-
-        for _ in range(attempts):
+        for _ in range(max(1, cfg.retries)):
             try:
-                r = requests.post(
-                    self.url,
-                    json=payload,
-                    timeout=(connect_timeout, request_timeout),
-                )
+                r = requests.post(self.url, json=payload, timeout=cfg.timeout_s)
                 if r.ok:
                     data = r.json()
                     msg = data.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -88,9 +87,7 @@ class LMStudioBackend:
                     last_err = RuntimeError(f"LM Studio error {r.status_code}: {detail}")
             except requests.RequestException as e:
                 last_err = RuntimeError(f"LM Studio connection error: {e}")
-            # pequeno backoff
-            import time
-            time.sleep(max(0.0, cfg.backoff_s or 0.0))
+            time.sleep(cfg.backoff_s)
 
         if last_err:
             raise last_err

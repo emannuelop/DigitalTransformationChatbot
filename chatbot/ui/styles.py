@@ -3,57 +3,94 @@ import streamlit as st
 from streamlit.components.v1 import html as _html
 
 def base_css(sidebar_hidden: bool = False) -> str:
-    # Mantemos a seta nativa da sidebar (sem hacks JS)
     return f"""
     <style>
+      /* ===== Tipografia ===== */
+      html, body, [class^="css"] {{
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans",
+                     "Liberation Sans", sans-serif !important;
+        letter-spacing: .01em;
+      }}
+
       :root {{
         --pad: 0.75rem;
+        --radius: 14px;
+        --radius-lg: 18px;
+
+        --surface: rgba(255,255,255,.06);
+        --border: rgba(255,255,255,.10);
       }}
 
       .block-container {{
-        padding-top: 2.25rem;
-        padding-bottom: 1rem;
-        max-width: 1200px;
+        padding-top: 2rem !important;
+        padding-bottom: 1rem !important;
+        max-width: 1200px !important;
       }}
 
-      /* ===== Chat ===== */
-      [data-testid="stChatMessageAvatar"] {{ display: none !important; }}
-      [data-testid="stChatMessage"] > div {{
-        border-radius: 14px;
-        padding: .75rem 1rem;
-        word-break: break-word;
-        margin-left: 0 !important;
-      }}
-      [data-testid="stChatMessage"]:first-of-type {{ margin-top: .75rem; }}
+/* ===== Chat ===== */
+[data-testid="stChatMessageAvatar"] {{ display: none !important; }}
 
-      /* ===== Sidebar shell (flex p/ colar o userbar no rodapé) ===== */
+/* Perguntas do usuário (bolha com borda leve) */
+[data-testid="stChatMessage"][data-testid="stChatMessage-user"] > div,
+[data-testid="stChatMessage"][class*="user"] > div {{
+  border-radius: 12px;
+  padding: 0.85rem 1rem;
+  word-break: break-word;
+  margin: 0.4rem 0;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}}
+
+/* Respostas do assistente — sem borda, fundo transparente */
+[data-testid="stChatMessage"][data-testid="stChatMessage-assistant"] > div,
+[data-testid="stChatMessage"][class*="assistant"] > div {{
+  border: none !important;
+  background: transparent !important;
+  padding: 0.85rem 1rem;
+  word-break: break-word;
+  margin: 0.4rem 0;
+}}
+
+
+      /* ===== Entrada do chat ===== */
+      textarea[aria-label="Pergunte algo sobre a base de conhecimento…"] {{
+        line-height: 1.4 !important;
+      }}
+
+      /* ===== Sidebar ===== */
       [data-testid="stSidebar"] > div:first-child {{
         display: flex !important;
         flex-direction: column !important;
         height: 100% !important;
         gap: .5rem;
       }}
-
-      /* Tira o título “Conversas” se existir em versões antigas */
       [data-testid="stSidebar"] .sidebar-head {{ display:none !important; }}
 
-      /* Botão “Novo chat” mais no topo */
+      /* Botão “Novo chat” */
       [data-testid="stSidebar"] button[kind="primary"] {{
         margin-top: 0 !important;
+        font-weight: 600 !important;
+        height: 42px !important;
       }}
 
-      /* Seção de histórico (subtítulo discreto) */
+      /* Subtítulo “Histórico” */
       [data-testid="stSidebar"] .sb-section {{
-        margin:.4rem 0 .2rem; font-size:.85rem; opacity:.75;
+        margin:.4rem 0 .15rem;
+        font-size:.86rem; opacity:.78;
       }}
 
-      /* Botões da lista de chats: truncar texto e não vazar */
+      /* Lista de chats: truncamento elegante + altura consistente */
       section[data-testid="stSidebar"] button[kind="secondary"] {{
         max-width: 100% !important;
+        min-height: 38px !important;
+        height: 38px !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        gap: .5rem !important;
+        padding: 0 .6rem !important;
         overflow: hidden !important;
-        text-overflow: ellipsis !important;
-        white-space: nowrap !important;
-        padding-right: .6rem !important;
+        border-radius: 10px !important;
       }}
       section[data-testid="stSidebar"] button[kind="secondary"] * {{
         overflow: hidden !important;
@@ -61,31 +98,18 @@ def base_css(sidebar_hidden: bool = False) -> str:
         white-space: nowrap !important;
       }}
 
-      /* ===== Botão de popover (seta) SEMPRE visível e com tamanho mínimo ===== */
-      [data-testid="stSidebar"] [data-testid="stPopoverButton"] {{
-        width: 36px !important;
-        min-width: 36px !important;
-        height: 36px !important;
-        display: inline-flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        opacity: 1 !important;
-        visibility: visible !important;
-      }}
-
-      /* ===== Userbar fixo no rodapé (avatar + nome) ===== */
+      /* ===== Userbar (rodapé da sidebar) ===== */
       .sb-userbar {{
-        margin-top: auto !important;                 /* cola no rodapé */
-        padding: .6rem .25rem .4rem .25rem;
-        border-top: 1px solid rgba(255,255,255,.08);
+        margin-top: auto !important;
+        padding: .6rem .25rem .5rem .25rem;
+        border-top: 1px solid var(--border);
       }}
       .sb-avatar {{
         width: 30px; height: 30px; border-radius: 9999px;
-        background: rgba(255,255,255,.08);
+        background: var(--surface);
         display:flex; align-items:center; justify-content:center;
         font-weight:700; font-size:.9rem; user-select:none;
       }}
-      /* Foto redonda (30px e 96px) */
       .sb-avatar-img, .sb-avatar-img-96 {{
         border-radius: 50% !important;
         object-fit: cover !important;
@@ -94,29 +118,37 @@ def base_css(sidebar_hidden: bool = False) -> str:
       .sb-avatar-img {{ width:30px !important; height:30px !important; }}
       .sb-avatar-img-96 {{ width:96px !important; height:96px !important; }}
 
-      /* Nome (botão do popover) sempre truncando */
+      /* >>> Correção principal: mostrar o NOME completo no botão do popover <<< */
       .sb-userbar button[data-testid="stPopoverButton"],
       .sb-userbar button[data-testid="stPopover"] {{
-        max-width: 100% !important;
-        overflow: hidden !important;
-        text-overflow: ellipsis !important;
-        white-space: nowrap !important;
+        width: 100% !important;                 /* ocupa toda a coluna */
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: flex-start !important; /* texto começa à esquerda */
+        gap: .5rem !important;
+        padding: 0 .6rem !important;
+        min-height: 36px !important;
+        height: auto !important;                /* permite crescer se quebrar linha */
+        border-radius: 10px !important;
+        overflow: visible !important;           /* NADA de cortar texto aqui */
+        white-space: normal !important;         /* permite quebra de linha */
       }}
+      /* O <p> interno do botão também não deve truncar */
       .sb-userbar button[data-testid="stPopoverButton"] p,
       .sb-userbar button[data-testid="stPopover"] p {{
-        max-width: 100% !important;
-        overflow: hidden !important;
-        text-overflow: ellipsis !important;
-        white-space: nowrap !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+        white-space: normal !important;         /* quebra o nome se necessário */
+        line-height: 1.2 !important;
+        margin: 0 !important;
       }}
 
       /* Popover: divisores compactos */
       div[data-testid="stPopoverContent"] hr {{
-        margin-top: .25rem !important;
-        margin-bottom: .25rem !important;
+        margin-top: .25rem !important; margin-bottom: .25rem !important;
       }}
 
-      /* ===== Seta de recolher/expandir da SIDEBAR SEMPRE visível ===== */
+      /* Seta de recolher/expandir da sidebar sempre visível */
       [data-testid="stSidebar"] button[aria-label*="colaps"],
       [data-testid="stSidebar"] button[aria-label*="ocultar"],
       [data-testid="stSidebar"] button[aria-label*="esconder"],
@@ -126,24 +158,30 @@ def base_css(sidebar_hidden: bool = False) -> str:
       [data-testid="stSidebar"] button[title*="esconder"],
       [data-testid="stSidebar"] button[title*="collapse"],
       [data-testid="stSidebar"] button[title*="expand"] {{
-        opacity: 1 !important;
-        visibility: visible !important;
-        transition: none !important;
+        opacity: 1 !important; visibility: visible !important; transition: none !important;
       }}
 
-      /* ===== Empty state ===== */
+      /* Empty state */
       .hero-wrap {{
         min-height: calc(100vh - 200px);
         display: flex; align-items: center; justify-content: center;
       }}
       .hero {{ width: 100%; max-width: 860px; text-align: center; margin: 0 auto; }}
-      .hero h1 {{ font-size: 2rem; line-height: 1.3; margin: 0 0 .75rem 0; }}
-      .hero p {{ opacity: .75; margin: 0 0 1rem 0; }}
+      .hero h1 {{ font-size: 2rem; line-height: 1.3; margin: 0 0 .65rem 0; }}
+      .hero p {{ opacity: .75; margin: 0 0 .5rem 0; }}
 
-      /* ===== Responsividade ===== */
+      /* Responsividade */
+      @media (max-width: 1024px) {{
+        .block-container {{ padding-left: .75rem; padding-right: .75rem; }}
+      }}
       @media (max-width: 900px) {{
         .block-container {{ padding-left: .6rem; padding-right: .6rem; }}
         .hero h1 {{ font-size: 1.7rem; }}
+      }}
+      @media (max-width: 680px) {{
+        section[data-testid="stSidebar"] button[kind="secondary"] {{
+          height: 40px !important;
+        }}
       }}
     </style>
     """

@@ -1,6 +1,9 @@
 from __future__ import annotations
 import sys
 from pathlib import Path
+from glob import glob
+import base64
+import mimetypes
 import streamlit as st
 
 # Caminho raiz p/ imports do projeto
@@ -47,7 +50,7 @@ def _unique_urls_in_order(df, limit=5):
         if len(out) >= limit: break
     return out
 
-def _call_rag(question: str) -> tuple[str, list[str], str | None]:
+def _call_rag(question: str):
     urls, debug = [], None
     try:
         index, mapping = _cached_search_handles()
@@ -72,8 +75,40 @@ ss.setdefault("page", "chat")             # "chat" | "profile"
 ss.setdefault("selected_chat_id", None)
 ss.setdefault("messages", [])             # cache do chat atual
 
-# ---------- Cabeçalho ----------
-st.markdown("## Chatbot de Transformação Digital")
+# ---------- Foto do usuário ----------
+def _photo_dir():
+    d = db.DATA_DIR / "user_photos"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+def _get_user_photo_path(user_id: int) -> Path | None:
+    files = []
+    for p in [str(_photo_dir() / f"{user_id}.*")]:
+        files.extend(glob(p))
+    if not files:
+        return None
+    files.sort(key=lambda p: Path(p).stat().st_mtime, reverse=True)
+    return Path(files[0])
+
+def _save_user_photo(user_id: int, uploaded_file) -> Path:
+    ext = Path(uploaded_file.name).suffix.lower() or ".png"
+    if ext not in (".png", ".jpg", ".jpeg", ".webp"):
+        ext = ".png"
+    for old in _photo_dir().glob(f"{user_id}.*"):
+        try: old.unlink()
+        except Exception: pass
+    out = _photo_dir() / f"{user_id}{ext}"
+    out.write_bytes(uploaded_file.getbuffer())
+    return out
+
+def _img_tag(path: Path, size: int, css_class: str = "") -> str:
+    """Retorna um <img> base64 com tamanho fixo (quadrado) — ideal p/ avatar redondo via CSS."""
+    if not path or not path.exists():
+        return ""
+    mime = mimetypes.guess_type(str(path))[0] or "image/png"
+    b64 = base64.b64encode(path.read_bytes()).decode()
+    cls = f' class="{css_class}"' if css_class else ""
+    return f'<img src="data:{mime};base64,{b64}" width="{size}" height="{size}"{cls} />'
 
 # ---------- Auxiliares ----------
 def _load_messages_into_state(user_id: int, chat_id: int) -> None:
@@ -97,20 +132,12 @@ def _title_from_prompt(text: str, max_len: int = 40) -> str:
     return (t[:max_len] + "…") if len(t) > max_len else (t or "Sem título")
 
 def _send_and_respond(user: dict, question: str):
-    """Processa o envio (usado tanto no hero quanto no chat normal)."""
-    # Salva + ecoa pergunta
     db.save_message(user["id"], "user", question, chat_id=ss["selected_chat_id"])
     ss["messages"].append({"role": "user", "text": question, "urls": []})
-
-    # Gera resposta
     with st.spinner("Consultando base e gerando resposta..."):
         answer_text, urls, debug = _call_rag(question)
-
-    # Salva resposta
     ss["messages"].append({"role": "assistant", "text": answer_text, "urls": urls})
     db.save_message(user["id"], "assistant", answer_text, chat_id=ss["selected_chat_id"])
-
-    # Renomeia chat na 1ª pergunta
     chats = db.list_chats(user["id"])
     cur = next((c for c in chats if c["id"] == ss["selected_chat_id"]), None)
     if cur and (cur["title"] == "Novo chat" or cur["title"] == "Sem título"):
@@ -168,10 +195,8 @@ def _sidebar(user: dict):
     with st.sidebar:
         inject_base_css()  # tema + ajustes
 
-        st.markdown('<div class="sidebar-head">Conversas</div>', unsafe_allow_html=True)
-
-        # Novo chat
-        if st.button("➕  Novo chat", use_container_width=True):
+        # Novo chat (grudado no topo, perto da seta da sidebar)
+        if st.button("Novo chat", use_container_width=True):
             cid = db.create_chat(user["id"], "Novo chat")
             ss["selected_chat_id"] = cid
             ss["messages"].clear()
@@ -185,23 +210,24 @@ def _sidebar(user: dict):
             st.caption("Sem conversas ainda.")
         else:
             for chat in chats:
-                cols = st.columns([0.82, 0.18])
+                # Coluna da seta com largura suficiente para não "sumir"
+                cols = st.columns([0.82, 0.18], vertical_alignment="center")
                 with cols[0]:
                     active = (chat["id"] == ss["selected_chat_id"])
                     label = f"● {chat['title']}" if active else chat["title"]
                     if st.button(label, key=f"sel_{chat['id']}", use_container_width=True, help=chat["title"]):
                         ss["selected_chat_id"] = chat["id"]
                         _load_messages_into_state(user["id"], chat["id"])
-                        ss["page"] = "chat"               # voltar ao chat se estava no perfil
+                        ss["page"] = "chat"
                         st.rerun()
                 with cols[1]:
-                    with st.popover("⋯", use_container_width=True):
+                    # O botão de popover fica sempre visível via CSS (min-width/height fixos)
+                    with st.popover("", use_container_width=True):
                         new_title = st.text_input("Renomear", value=chat["title"], key=f"rn_{chat['id']}")
                         if st.button("Salvar nome", key=f"rns_{chat['id']}", use_container_width=True):
                             db.rename_chat(user["id"], chat["id"], new_title)
                             st.rerun()
-                        st.divider()
-                        if st.button("🗑️ Excluir chat", key=f"del_{chat['id']}", use_container_width=True):
+                        if st.button("Excluir chat", key=f"del_{chat['id']}", use_container_width=True):
                             db.delete_chat(user["id"], chat["id"])
                             ss["selected_chat_id"] = None
                             ss["messages"].clear()
@@ -209,17 +235,31 @@ def _sidebar(user: dict):
                             ss["page"] = "chat"
                             st.rerun()
 
-        st.divider()
-        # Nome do usuário -> Perfil
-        if st.button(f"👤 {user['name']}", use_container_width=True, help="Abrir perfil"):
-            ss["page"] = "profile"
-            st.rerun()
+        # ===== Userbar fixa no rodapé =====
+        st.markdown('<div class="sb-userbar">', unsafe_allow_html=True)
+        ucols = st.columns([0.18, 0.82], vertical_alignment="center")
 
-        if st.button("Sair", use_container_width=True):
-            ss["auth_user"] = None
-            ss["messages"].clear()
-            ss["selected_chat_id"] = None
-            st.rerun()
+        # Avatar (foto se houver; senão inicial)
+        photo_path = _get_user_photo_path(user["id"])
+        with ucols[0]:
+            if photo_path and photo_path.exists():
+                st.markdown(_img_tag(photo_path, 30, "sb-avatar-img"), unsafe_allow_html=True)
+            else:
+                avatar_letter = (user["name"][:1] or "U").upper()
+                st.markdown(f'<div class="sb-avatar">{avatar_letter}</div>', unsafe_allow_html=True)
+
+        with ucols[1]:
+            # Nome visível; menu ao clicar
+            with st.popover(user["name"], use_container_width=True):
+                if st.button("Configurações", use_container_width=True):
+                    ss["page"] = "profile"
+                    st.rerun()
+                if st.button("Sair", use_container_width=True):
+                    ss["auth_user"] = None
+                    ss["messages"].clear()
+                    ss["selected_chat_id"] = None
+                    st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # ---------- Páginas ----------
 def _chat_screen(user: dict):
@@ -228,9 +268,8 @@ def _chat_screen(user: dict):
     if ss.get("selected_chat_id") is None:
         _ensure_chat_selected(user)
 
-    # ===== Empty state (estilo ChatGPT) =====
+    # ===== Empty state (padronizado com st.chat_input) =====
     if not ss["messages"]:
-        # Hero central
         st.markdown(
             """
             <div class="hero-wrap">
@@ -242,15 +281,22 @@ def _chat_screen(user: dict):
             """,
             unsafe_allow_html=True,
         )
-        # Campo grande para iniciar a conversa
-        with st.form("hero_form", clear_on_submit=True):
-            q = st.text_input("Pergunte qualquer coisa", placeholder="Pergunte qualquer coisa",
-                              label_visibility="collapsed", key="hero_q")
-            sent = st.form_submit_button("Enviar", use_container_width=True)
-        if sent and q and q.strip():
-            _send_and_respond(user, q.strip())
-            st.rerun()
-        return  # não renderiza nada abaixo enquanto o chat está vazio
+
+        user_prompt = st.chat_input("Pergunte algo sobre a base de conhecimento…")
+        if user_prompt:
+            question = user_prompt.strip()
+            st.chat_message("user").write(question)
+            answer_text, urls, debug = _send_and_respond(user, question)
+            m = st.chat_message("assistant")
+            m.write(answer_text)
+            if urls:
+                with st.expander("Fontes (links)"):
+                    for u in urls:
+                        st.markdown(f"- {u}")
+            if debug:
+                with st.expander("Detalhes técnicos"):
+                    st.code(debug)
+        return
 
     # ===== Conversa já iniciada =====
     for msg in ss["messages"]:
@@ -268,9 +314,7 @@ def _chat_screen(user: dict):
     user_prompt = st.chat_input("Pergunte algo sobre a base de conhecimento…")
     if user_prompt and ss.get("selected_chat_id") is not None:
         question = user_prompt.strip()
-        # Mostra imediatamente a pergunta
         st.chat_message("user").write(question)
-        # Processa, mostra e salva
         answer_text, urls, debug = _send_and_respond(user, question)
         m = st.chat_message("assistant")
         m.write(answer_text)
@@ -284,11 +328,24 @@ def _chat_screen(user: dict):
 
 def _profile_screen(user: dict):
     inject_base_css()
-    if st.button("← Voltar ao chat", use_container_width=True):
-        ss["page"] = "chat"
-        st.rerun()
 
     st.subheader("Perfil do usuário")
+
+    # Mostra foto atual (se houver) + e-mail (somente leitura)
+    current = _get_user_photo_path(user["id"])
+    cols_top = st.columns([0.22, 0.78])
+    with cols_top[0]:
+        if current and current.exists():
+            st.markdown(_img_tag(current, 96, "sb-avatar-img-96"), unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="sb-avatar" style="width:96px;height:96px;font-size:1.8rem;">'
+                        f'{(user["name"][:1] or "U").upper()}</div>', unsafe_allow_html=True)
+    with cols_top[1]:
+        st.text_input("E-mail", value=user["email"], disabled=True)
+
+    st.markdown("---")
+
+    # Alterar nome
     with st.form("profile_name"):
         name = st.text_input("Nome", value=user["name"])
         ok = st.form_submit_button("Salvar nome")
@@ -300,7 +357,22 @@ def _profile_screen(user: dict):
         except Exception as e:
             st.error(f"Falha ao atualizar nome: {e}")
 
+    # Upload/alterar foto
+    st.markdown("### Foto do usuário")
+    up = st.file_uploader("Envie uma imagem (png/jpg/jpeg/webp)", type=["png", "jpg", "jpeg", "webp"])
+    colu = st.columns([0.25, 0.75])
+    with colu[0]:
+        if up is not None and up.size > 0:
+            try:
+                saved = _save_user_photo(user["id"], up)
+                st.success("Foto atualizada.")
+                st.markdown(_img_tag(saved, 96, "sb-avatar-img-96"), unsafe_allow_html=True)
+            except Exception as e:
+                st.error(f"Falha ao salvar foto: {e}")
+
     st.markdown("---")
+
+    # Trocar senha
     st.subheader("Trocar senha")
     with st.form("profile_pwd"):
         old = st.text_input("Senha atual", type="password")

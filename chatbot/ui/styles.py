@@ -27,34 +27,44 @@ def base_css(sidebar_hidden: bool = False) -> str:
         max-width: 1200px !important;
       }}
 
-/* ===== Chat ===== */
-[data-testid="stChatMessageAvatar"] {{ display: none !important; }}
+      /* ===== Chat ===== */
+      [data-testid="stChatMessageAvatar"] {{ display: none !important; }}
 
-/* Perguntas do usuário (bolha com borda leve) */
-[data-testid="stChatMessage"][data-testid="stChatMessage-user"] > div,
-[data-testid="stChatMessage"][class*="user"] > div {{
-  border-radius: 12px;
-  padding: 0.85rem 1rem;
-  word-break: break-word;
-  margin: 0.4rem 0;
-  border: 1px solid var(--border);
-  background: var(--surface);
-}}
+      /* Perguntas do usuário (bolha com borda leve) */
+      [data-testid="stChatMessage"][data-testid="stChatMessage-user"] > div,
+      [data-testid="stChatMessage"][class*="user"] > div {{
+        border-radius: 12px;
+        padding: 0.85rem 1rem;
+        word-break: break-word;
+        margin: 0.4rem 0;
+        border: 1px solid var(--border);
+        background: var(--surface);
+      }}
 
-/* Respostas do assistente — sem borda, fundo transparente */
-[data-testid="stChatMessage"][data-testid="stChatMessage-assistant"] > div,
-[data-testid="stChatMessage"][class*="assistant"] > div {{
-  border: none !important;
-  background: transparent !important;
-  padding: 0.85rem 1rem;
-  word-break: break-word;
-  margin: 0.4rem 0;
-}}
-
+      /* Respostas do assistente — sem borda, fundo transparente */
+      [data-testid="stChatMessage"][data-testid="stChatMessage-assistant"] > div,
+      [data-testid="stChatMessage"][class*="assistant"] > div {{
+        border: none !important;
+        background: transparent !important;
+        padding: 0.85rem 1rem;
+        word-break: break-word;
+        margin: 0.4rem 0;
+      }}
 
       /* ===== Entrada do chat ===== */
       textarea[aria-label="Pergunte algo sobre a base de conhecimento…"] {{
         line-height: 1.4 !important;
+      }}
+
+      /* ===== Sugestões (pílulas) ===== */
+      .sugg {{ margin-top: .25rem; }}           /* aproxima das frases do hero */
+      .sugg button[data-testid="baseButton-secondary"] {{
+        border: 1px solid var(--border) !important;
+        background: var(--surface) !important;
+        border-radius: 9999px !important;
+        padding: .45rem .8rem !important;
+        text-align: left !important;
+        white-space: normal !important;
       }}
 
       /* ===== Sidebar ===== */
@@ -79,7 +89,7 @@ def base_css(sidebar_hidden: bool = False) -> str:
         font-size:.86rem; opacity:.78;
       }}
 
-      /* Lista de chats: truncamento elegante + altura consistente */
+      /* Lista de chats */
       section[data-testid="stSidebar"] button[kind="secondary"] {{
         max-width: 100% !important;
         min-height: 38px !important;
@@ -118,27 +128,26 @@ def base_css(sidebar_hidden: bool = False) -> str:
       .sb-avatar-img {{ width:30px !important; height:30px !important; }}
       .sb-avatar-img-96 {{ width:96px !important; height:96px !important; }}
 
-      /* >>> Correção principal: mostrar o NOME completo no botão do popover <<< */
+      /* Nome completo no popover */
       .sb-userbar button[data-testid="stPopoverButton"],
       .sb-userbar button[data-testid="stPopover"] {{
-        width: 100% !important;                 /* ocupa toda a coluna */
+        width: 100% !important;
         display: inline-flex !important;
         align-items: center !important;
-        justify-content: flex-start !important; /* texto começa à esquerda */
+        justify-content: flex-start !important;
         gap: .5rem !important;
         padding: 0 .6rem !important;
         min-height: 36px !important;
-        height: auto !important;                /* permite crescer se quebrar linha */
+        height: auto !important;
         border-radius: 10px !important;
-        overflow: visible !important;           /* NADA de cortar texto aqui */
-        white-space: normal !important;         /* permite quebra de linha */
+        overflow: visible !important;
+        white-space: normal !important;
       }}
-      /* O <p> interno do botão também não deve truncar */
       .sb-userbar button[data-testid="stPopoverButton"] p,
       .sb-userbar button[data-testid="stPopover"] p {{
         overflow: visible !important;
         text-overflow: clip !important;
-        white-space: normal !important;         /* quebra o nome se necessário */
+        white-space: normal !important;
         line-height: 1.2 !important;
         margin: 0 !important;
       }}
@@ -148,7 +157,7 @@ def base_css(sidebar_hidden: bool = False) -> str:
         margin-top: .25rem !important; margin-bottom: .25rem !important;
       }}
 
-      /* Seta de recolher/expandir da sidebar sempre visível */
+      /* Seta da sidebar sempre visível */
       [data-testid="stSidebar"] button[aria-label*="colaps"],
       [data-testid="stSidebar"] button[aria-label*="ocultar"],
       [data-testid="stSidebar"] button[aria-label*="esconder"],
@@ -161,14 +170,15 @@ def base_css(sidebar_hidden: bool = False) -> str:
         opacity: 1 !important; visibility: visible !important; transition: none !important;
       }}
 
-      /* Empty state */
+      /* Empty state (aproxima sugestões do texto) */
       .hero-wrap {{
-        min-height: calc(100vh - 200px);
-        display: flex; align-items: center; justify-content: center;
+        min-height: 0 !important;            /* remove espaço gigante */
+        display: block !important;            /* evita centralização vertical */
+        margin: .25rem 0 .25rem 0 !important; /* aproxima do próximo bloco */
       }}
-      .hero {{ width: 100%; max-width: 860px; text-align: center; margin: 0 auto; }}
-      .hero h1 {{ font-size: 2rem; line-height: 1.3; margin: 0 0 .65rem 0; }}
-      .hero p {{ opacity: .75; margin: 0 0 .5rem 0; }}
+      .hero {{ width: 100%; max-width: 860px; text-align: center; margin: 0 auto .25rem; }}
+      .hero h1 {{ font-size: 2rem; line-height: 1.3; margin: 0 0 .45rem 0; }}
+      .hero p {{ opacity: .75; margin: 0; }}
 
       /* Responsividade */
       @media (max-width: 1024px) {{

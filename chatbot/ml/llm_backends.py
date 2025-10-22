@@ -15,9 +15,6 @@ class GenerationConfig:
     backoff_s: float = 1.5
 
 class LMStudioBackend:
-    """
-    Cliente mínimo para /v1/chat/completions do LM Studio.
-    """
     def __init__(self, model: str, host: str):
         self.model = model
         self.base = host.rstrip("/")
@@ -34,10 +31,6 @@ class LMStudioBackend:
             return {"error": str(e)}
 
     def warm_up(self, timeout_s: int = 40) -> None:
-        """
-        Dispara um prompt curtíssimo só para carregar o modelo (cold start).
-        Ignora erros silenciosamente para não travar o fluxo.
-        """
         try:
             payload = {
                 "model": self.model,

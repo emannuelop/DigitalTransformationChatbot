@@ -4,6 +4,17 @@ from .helpers import send_and_respond, ensure_chat_selected
 from .styles import inject_base_css
 from . import db
 
+# ---------------------------------------------
+# SUGESTÕES PADRÃO (mostradas apenas em chat novo)
+# ---------------------------------------------
+SUGGESTED_QUESTIONS = [
+    "O que é transformação digital?",
+    "Quais são os benefícios da transformação digital?",
+    "Como começo um projeto de transformação digital?",
+    "Quais indicadores posso usar para medir produtividade?",
+]
+
+
 def login_screen():
     inject_base_css()
     tabs = st.tabs(["🔐 Entrar", "🆕 Cadastrar"])
@@ -44,9 +55,10 @@ def login_screen():
             else:
                 try:
                     _ = db.create_user(name=name.strip(), email=email2.strip(), password=pwd1)
-                    st.success("Conta criada! Faça login na aba ‘Entrar’.")
+                    st.success("Conta criado! Faça login na aba ‘Entrar’.")
                 except Exception as e:
                     st.error(f"Falha ao cadastrar: {e}")
+
 
 def chat_screen(user: dict):
     inject_base_css()
@@ -55,36 +67,50 @@ def chat_screen(user: dict):
     if ss.get("selected_chat_id") is None:
         ensure_chat_selected(user)
 
-    # Empty state
+    # Estado vazio (chat novo)
     if not ss["messages"]:
         st.markdown(
             """
             <div class="hero-wrap">
               <div class="hero">
                 <h1>O que quer fazer hoje?</h1>
-                <p>Pergunte qualquer coisa</p>
+                <p>Pergunte qualquer coisa ou escolha uma sugestão abaixo.</p>
               </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
+
+        # ---- Sugestões em um container para poder ocultar no clique
+        sugg_box = st.container()
+        with sugg_box:
+            st.markdown('<div class="sugg">', unsafe_allow_html=True)
+            st.markdown("#### Sugestões")
+            cols = st.columns(2, vertical_alignment="center")
+            clicked = None
+            for i, q in enumerate(SUGGESTED_QUESTIONS):
+                if cols[i % 2].button(q, key=f"sugg_{i}", use_container_width=True):
+                    clicked = q
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        # Clique em sugestão: some as sugestões, mostra a pergunta, consulta e rerun
+        if clicked:
+            question = clicked.strip()
+            sugg_box.empty()  # esconde as sugestões imediatamente
+            st.chat_message("user").write(question)  # mostra a pergunta já na tela
+            send_and_respond(user, question)         # salva + spinner + resposta (helpers.py)
+            st.rerun()                               # re-render a partir do histórico
+
+        # Input normal (fixo no rodapé) — mostra a pergunta antes do spinner
         user_prompt = st.chat_input("Pergunte algo sobre a base de conhecimento…")
         if user_prompt:
             question = user_prompt.strip()
-            st.chat_message("user").write(question)
-            answer_text, urls, debug = send_and_respond(user, question)
-            m = st.chat_message("assistant")
-            m.write(answer_text)
-            if urls:
-                with st.expander("Fontes (links)"):
-                    for u in urls:
-                        st.markdown(f"- {u}")
-            if debug:
-                with st.expander("Detalhes técnicos"):
-                    st.code(debug)
+            st.chat_message("user").write(question)  # mostra a pergunta imediatamente
+            send_and_respond(user, question)         # salva + spinner + resposta (helpers.py)
+            st.rerun()
         return
 
-    # Conversa existente
+    # Conversa existente (renderiza a partir do estado)
     for msg in ss["messages"]:
         if msg["role"] == "user":
             st.chat_message("user").write(msg["text"])
@@ -96,18 +122,10 @@ def chat_screen(user: dict):
                     for u in msg["urls"]:
                         st.markdown(f"- {u}")
 
-    # Input
+    # Input contínuo — mostra a pergunta antes do spinner
     user_prompt = st.chat_input("Pergunte algo sobre a base de conhecimento…")
     if user_prompt and ss.get("selected_chat_id") is not None:
         question = user_prompt.strip()
-        st.chat_message("user").write(question)
-        answer_text, urls, debug = send_and_respond(user, question)
-        m = st.chat_message("assistant")
-        m.write(answer_text)
-        if urls:
-            with st.expander("Fontes (links)"):
-                for u in urls:
-                    st.markdown(f"- {u}")
-        if debug:
-            with st.expander("Detalhes técnicos"):
-                st.code(debug)
+        st.chat_message("user").write(question)  # mostra a pergunta imediatamente
+        send_and_respond(user, question)         # salva + spinner + resposta (helpers.py)
+        st.rerun()

@@ -28,7 +28,7 @@ SCORE_CUTOFF: float = 0.00
 # LM Studio
 LMSTUDIO_HOST: str  = "http://127.0.0.1:1234"
 # Mais rápido que o reasoning:
-LMSTUDIO_MODEL: str = "microsoft/phi-4-mini-instruct"
+LMSTUDIO_MODEL: str = "ibm/granite-4-h-tiny"
 
 # Geração (o pipeline ajusta max_tokens dinamicamente até 1000)
 GEN_TEMPERATURE: float = 0.15

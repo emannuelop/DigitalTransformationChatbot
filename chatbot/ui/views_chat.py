@@ -117,10 +117,35 @@ def chat_screen(user: dict):
         else:
             m = st.chat_message("assistant")
             m.write(msg["text"])
+
+            # ---- Fontes (links) com rótulos abreviados, clicáveis e com quebra automática
             if msg.get("urls"):
+                from urllib.parse import urlparse
+
+                def _pretty_label(u: str, max_len: int = 90) -> str:
+                    """Texto curto para mostrar no link; nomes de arquivo permanecem como estão."""
+                    if not isinstance(u, str) or not u:
+                        return u
+                    if not u.startswith(("http://", "https://")):
+                        # Ex.: "MeuArquivo.pdf — fonte (PDF)"
+                        return u
+                    p = urlparse(u)
+                    label = (p.netloc or "") + (p.path or "")
+                    if p.query:
+                        label += "?" + p.query
+                    if len(label) > max_len:
+                        label = label[: max_len - 1] + "…"
+                    return label
+
                 with st.expander("Fontes (links)"):
                     for u in msg["urls"]:
-                        st.markdown(f"- {u}")
+                        if isinstance(u, str) and u.startswith(("http://", "https://")):
+                            label = _pretty_label(u)
+                            # Usa APENAS Markdown (sem HTML) para o link ser clicável
+                            st.markdown(f"- [{label}]({u})")
+                        else:
+                            # Nomes de PDFs (ex.: upload) vão como texto simples
+                            st.markdown(f"- {u}")
 
     # Input contínuo — mostra a pergunta antes do spinner
     user_prompt = st.chat_input("Pergunte algo sobre a base de conhecimento…")

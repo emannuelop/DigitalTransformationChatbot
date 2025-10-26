@@ -20,6 +20,11 @@ def render_sidebar(user: dict) -> None:
             st.session_state["page"] = "chat"
             st.rerun()
 
+        # >>> NOVO BOTÃO (apenas navegação de página) <<<
+        if st.button("➕ Adicionar base de conhecimento", use_container_width=True):
+            st.session_state["page"] = "ingest"
+            st.rerun()
+
         # Histórico
         st.markdown('<div class="sb-section">Histórico</div>', unsafe_allow_html=True)
         chats = db.list_chats(user["id"])

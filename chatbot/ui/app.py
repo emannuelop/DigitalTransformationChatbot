@@ -29,12 +29,15 @@ ss.setdefault("messages", [])             # cache do chat atual
 # ---------- Router ----------
 inject_base_css()
 if ss["auth_user"] is None:
-    # Tela de login/cadastro vive dentro da sidebar page-less
     from chatbot.ui.views_chat import login_screen  # evita import circular
     login_screen()
 else:
     render_sidebar(ss["auth_user"])
     if ss["page"] == "profile":
         profile_screen(ss["auth_user"])
+    elif ss["page"] == "ingest":
+        from chatbot.ui.views_ingest import ingest_screen
+        ingest_screen(ss["auth_user"])
     else:
         chat_screen(ss["auth_user"])
+

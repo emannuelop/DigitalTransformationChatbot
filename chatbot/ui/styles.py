@@ -57,7 +57,7 @@ def base_css(sidebar_hidden: bool = False) -> str:
       }}
 
       /* ===== Sugestões (pílulas) ===== */
-      .sugg {{ margin-top: .25rem; }}           /* aproxima das frases do hero */
+      .sugg {{ margin-top: .25rem; }}
       .sugg button[data-testid="baseButton-secondary"] {{
         border: 1px solid var(--border) !important;
         background: var(--surface) !important;
@@ -170,11 +170,11 @@ def base_css(sidebar_hidden: bool = False) -> str:
         opacity: 1 !important; visibility: visible !important; transition: none !important;
       }}
 
-      /* Empty state (aproxima sugestões do texto) */
+      /* Empty state */
       .hero-wrap {{
-        min-height: 0 !important;            /* remove espaço gigante */
-        display: block !important;            /* evita centralização vertical */
-        margin: .25rem 0 .25rem 0 !important; /* aproxima do próximo bloco */
+        min-height: 0 !important;
+        display: block !important;
+        margin: .25rem 0 .25rem 0 !important;
       }}
       .hero {{ width: 100%; max-width: 860px; text-align: center; margin: 0 auto .25rem; }}
       .hero h1 {{ font-size: 2rem; line-height: 1.3; margin: 0 0 .45rem 0; }}
@@ -192,6 +192,35 @@ def base_css(sidebar_hidden: bool = False) -> str:
         section[data-testid="stSidebar"] button[kind="secondary"] {{
           height: 40px !important;
         }}
+      }}
+
+      /* ====== Minhas fontes (cards com st.container(border=True)) ====== */
+      #sources-list [data-testid="stVerticalBlockBorderWrapper"] {{
+        border-radius: var(--radius) !important;
+        padding: .85rem .95rem !important;
+        border-color: var(--border) !important;
+        background: var(--surface) !important;
+      }}
+      #sources-list .src-name {{
+        font-weight: 600; margin-bottom: .25rem;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }}
+      #sources-list .src-url {{
+        font-size: .85rem; opacity: .9; word-break: break-all;
+      }}
+      #sources-list .stTextInput > div > div > input {{
+        height: 36px !important;
+      }}
+      #sources-list .stButton > button {{
+        height: 36px !important;
+      }}
+
+      /* ====== Quebra de URLs longas dentro do expander "Fontes (links)" ====== */
+      details [data-testid="stMarkdownContainer"] a,
+      details [data-testid="stMarkdownContainer"] li {{
+        word-break: break-word;
+        overflow-wrap: anywhere;
+        white-space: normal;
       }}
     </style>
     """

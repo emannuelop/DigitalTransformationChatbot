@@ -1,9 +1,11 @@
+# chatbot/ui/helpers.py
 from __future__ import annotations
 from pathlib import Path
 from glob import glob
 import base64
 import mimetypes
-from typing import List, Tuple
+from typing import List, Tuple, Dict
+import sqlite3
 import streamlit as st
 import json
 
@@ -50,7 +52,6 @@ def title_from_prompt(text: str, max_len: int = 40) -> str:
     t = (text or "").strip().replace("\n", " ")
     return (t[:max_len] + "…") if len(t) > max_len else (t or "Sem título")
 
-
 # ---------- Histórico/estado ----------
 def load_messages_into_state(user_id: int, chat_id: int) -> None:
     ss = st.session_state
@@ -69,6 +70,62 @@ def ensure_chat_selected(user: dict) -> None:
     if ss.get("selected_chat_id") is None:
         ss["selected_chat_id"] = chats[0]["id"]
         load_messages_into_state(user["id"], ss["selected_chat_id"])
+
+# ---------- Conexão com knowledge_base (para citar fontes pelo nome) ----------
+def _kb_conn() -> sqlite3.Connection:
+    # Import tardio para evitar conflitos de path
+    from chatbot.extraction.scraping import DB_PATH
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def _lookup_user_labels(urls: List[str]) -> Dict[str, str]:
+    """
+    Retorna um mapa url -> display_name (apenas para fontes adicionadas via UI).
+    """
+    if not urls:
+        return {}
+    try:
+        conn = _kb_conn()
+        placeholders = ",".join(["?"] * len(urls))
+        rows = conn.execute(f"""
+            SELECT d.url, us.display_name
+            FROM user_sources us
+            JOIN documents d ON d.id = us.doc_id
+            WHERE d.url IN ({placeholders})
+        """, urls).fetchall()
+        conn.close()
+        return {r["url"]: r["display_name"] for r in rows}
+    except Exception:
+        return {}
+
+def unique_urls_in_order(df, limit=5) -> List[str]:
+    """
+    Mantém comportamento antigo (lista de strings), mas,
+    quando a fonte foi adicionada pelo usuário, devolve o NOME do PDF.
+    """
+    seen, ordered = set(), []
+    if df is None:
+        return ordered
+    raw_urls: List[str] = []
+    for _, r in df.iterrows():
+        u = (r.get("url") or "").strip()
+        if u and u not in seen:
+            seen.add(u)
+            raw_urls.append(u)
+        if len(raw_urls) >= limit:
+            break
+
+    labels = _lookup_user_labels(raw_urls)
+    pretty: List[str] = []
+    for u in raw_urls:
+        if u in labels:
+            # Cita explicitamente que veio daquele PDF
+            pretty.append(f"{labels[u]} — fonte (PDF)")
+        else:
+            # URL da web continua como link
+            pretty.append(u)
+    return pretty
 
 # ---------- RAG ----------
 try:
@@ -94,19 +151,6 @@ except Exception:
 @st.cache_resource(show_spinner=False)
 def cached_search_handles():
     return load_search()
-
-def unique_urls_in_order(df, limit=5) -> List[str]:
-    seen, out = set(), []
-    if df is None:
-        return out
-    for _, r in df.iterrows():
-        u = (r.get("url") or "").strip()
-        if u and u not in seen:
-            seen.add(u)
-            out.append(u)
-        if len(out) >= limit:
-            break
-    return out
 
 def call_rag(question: str) -> Tuple[str, List[str], str | None]:
     urls, debug = [], None

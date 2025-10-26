@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime
 from typing import Iterator, List, Tuple, Optional, Dict
-
+import json
 from passlib.hash import pbkdf2_sha256 as HASHER
 
 try:
@@ -20,11 +20,13 @@ DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "app.db"
 
+
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
     return conn
+
 
 @contextmanager
 def get_conn() -> Iterator[sqlite3.Connection]:
@@ -35,12 +37,15 @@ def get_conn() -> Iterator[sqlite3.Connection]:
     finally:
         conn.close()
 
+
 def _now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
 
 def _table_has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
     cur = conn.execute(f"PRAGMA table_info({table});")
     return any(r[1] == column for r in cur.fetchall())
+
 
 def init_db() -> None:
     with get_conn() as c:
@@ -74,6 +79,7 @@ def init_db() -> None:
             user_id INTEGER NOT NULL,
             role TEXT NOT NULL CHECK(role IN ('user','assistant')),
             text TEXT NOT NULL,
+            sources TEXT, -- NOVA COLUNA PARA GUARDAR FONTES
             created_at TEXT NOT NULL,
             chat_id INTEGER,
             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -81,13 +87,15 @@ def init_db() -> None:
         );""")
         c.execute("CREATE INDEX IF NOT EXISTS idx_messages_user ON messages(user_id, created_at);")
 
-        # Garantir coluna 'chat_id' para DBs antigos
-        has_chat_id = _table_has_column(c, "messages", "chat_id")
-        if not has_chat_id:
+        # Garantir colunas novas
+        if not _table_has_column(c, "messages", "chat_id"):
             c.execute("ALTER TABLE messages ADD COLUMN chat_id INTEGER;")
+        if not _table_has_column(c, "messages", "sources"):
+            c.execute("ALTER TABLE messages ADD COLUMN sources TEXT;")
+
         c.execute("CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, created_at);")
 
-        # Migrar mensagens sem chat_id -> um chat por usuário
+        # Migrar mensagens antigas
         cur_users = c.execute("SELECT DISTINCT user_id FROM messages WHERE chat_id IS NULL;").fetchall()
         for (uid,) in cur_users:
             row = c.execute(
@@ -104,10 +112,12 @@ def init_db() -> None:
                 ).lastrowid
             c.execute("UPDATE messages SET chat_id=? WHERE user_id=? AND chat_id IS NULL;", (chat_id, uid))
 
+
 # ---------- Usuários ----------
 def email_exists(email: str) -> bool:
     with get_conn() as c:
         return c.execute("SELECT 1 FROM users WHERE email=? LIMIT 1;", (email.strip().lower(),)).fetchone() is not None
+
 
 def get_user(email: str) -> Optional[Dict]:
     with get_conn() as c:
@@ -115,8 +125,10 @@ def get_user(email: str) -> Optional[Dict]:
             "SELECT id, name, email, password_hash, created_at FROM users WHERE email=?;",
             (email.strip().lower(),)
         ).fetchone()
-        if not r: return None
+        if not r:
+            return None
         return {"id": r[0], "name": r[1], "email": r[2], "password_hash": r[3], "created_at": r[4]}
+
 
 def get_user_by_id(user_id: int) -> Optional[Dict]:
     with get_conn() as c:
@@ -124,8 +136,10 @@ def get_user_by_id(user_id: int) -> Optional[Dict]:
             "SELECT id, name, email, password_hash, created_at FROM users WHERE id=?;",
             (user_id,)
         ).fetchone()
-        if not r: return None
+        if not r:
+            return None
         return {"id": r[0], "name": r[1], "email": r[2], "password_hash": r[3], "created_at": r[4]}
+
 
 def create_user(name: str, email: str, password: str) -> int:
     email = email.strip().lower()
@@ -137,6 +151,7 @@ def create_user(name: str, email: str, password: str) -> int:
             "INSERT INTO users(name, email, password_hash, created_at) VALUES (?,?,?,?);",
             (name.strip(), email, password_hash, _now())
         ).lastrowid
+
 
 def authenticate(email: str, password: str) -> Optional[Dict]:
     user = get_user(email)
@@ -162,11 +177,13 @@ def authenticate(email: str, password: str) -> Optional[Dict]:
             pass
     return None
 
+
 def update_user_name(user_id: int, new_name: str) -> None:
     if not new_name.strip():
         raise ValueError("Nome não pode ser vazio.")
     with get_conn() as c:
         c.execute("UPDATE users SET name=? WHERE id=?;", (new_name.strip(), user_id))
+
 
 def update_user_password(user_id: int, current_password: str, new_password: str) -> None:
     user = get_user_by_id(user_id)
@@ -197,6 +214,7 @@ def update_user_password(user_id: int, current_password: str, new_password: str)
     with get_conn() as c:
         c.execute("UPDATE users SET password_hash=? WHERE id=?;", (new_hash, user_id))
 
+
 # ---------- Chats & Mensagens ----------
 def create_chat(user_id: int, title: str = "Novo chat") -> int:
     ts = _now()
@@ -206,6 +224,7 @@ def create_chat(user_id: int, title: str = "Novo chat") -> int:
             (user_id, title.strip() or "Novo chat", ts, ts)
         ).lastrowid
 
+
 def list_chats(user_id: int, limit: int = 100) -> List[Dict]:
     with get_conn() as c:
         cur = c.execute(
@@ -213,6 +232,7 @@ def list_chats(user_id: int, limit: int = 100) -> List[Dict]:
             (user_id, limit)
         )
         return [{"id": r[0], "title": r[1], "created_at": r[2], "updated_at": r[3]} for r in cur.fetchall()]
+
 
 def rename_chat(user_id: int, chat_id: int, new_title: str) -> None:
     with get_conn() as c:
@@ -223,35 +243,40 @@ def rename_chat(user_id: int, chat_id: int, new_title: str) -> None:
         if res.rowcount == 0:
             raise ValueError("Chat não encontrado.")
 
+
 def delete_chat(user_id: int, chat_id: int) -> None:
     with get_conn() as c:
         res = c.execute("DELETE FROM chats WHERE id=? AND user_id=?;", (chat_id, user_id))
         if res.rowcount == 0:
             raise ValueError("Chat não encontrado.")
 
-def save_message(user_id: int, role: str, text: str, chat_id: Optional[int] = None) -> int:
+
+def save_message(user_id: int, role: str, text: str, chat_id: Optional[int] = None, urls: list[str] | None = None) -> int:
     with get_conn() as c:
+        sources = json.dumps(urls or [])
         mid = c.execute(
-            "INSERT INTO messages(user_id, role, text, created_at, chat_id) VALUES (?,?,?,?,?);",
-            (user_id, role, text, _now(), chat_id)
+            "INSERT INTO messages(user_id, role, text, sources, created_at, chat_id) VALUES (?,?,?,?,?,?);",
+            (user_id, role, text, sources, _now(), chat_id)
         ).lastrowid
         if chat_id:
             c.execute("UPDATE chats SET updated_at=? WHERE id=?;", (_now(), chat_id))
         return mid
 
-def load_history(user_id: int, limit: int = 500, chat_id: Optional[int] = None) -> List[Tuple[str, str, str]]:
+
+def load_history(user_id: int, limit: int = 500, chat_id: Optional[int] = None) -> List[Tuple[str, str, list[str], str]]:
     with get_conn() as c:
         if chat_id is None:
             cur = c.execute(
-                "SELECT role, text, created_at FROM messages WHERE user_id=? ORDER BY created_at ASC LIMIT ?;",
+                "SELECT role, text, sources, created_at FROM messages WHERE user_id=? ORDER BY created_at ASC LIMIT ?;",
                 (user_id, limit)
             )
         else:
             cur = c.execute(
-                "SELECT role, text, created_at FROM messages WHERE user_id=? AND chat_id=? ORDER BY created_at ASC LIMIT ?;",
+                "SELECT role, text, sources, created_at FROM messages WHERE user_id=? AND chat_id=? ORDER BY created_at ASC LIMIT ?;",
                 (user_id, chat_id, limit)
             )
-        return [(r[0], r[1], r[2]) for r in cur.fetchall()]
+        return [(r[0], r[1], json.loads(r[2] or "[]"), r[3]) for r in cur.fetchall()]
+
 
 def clear_history(user_id: int, chat_id: Optional[int] = None) -> None:
     with get_conn() as c:

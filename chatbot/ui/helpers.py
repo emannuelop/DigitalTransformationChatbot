@@ -5,6 +5,7 @@ import base64
 import mimetypes
 from typing import List, Tuple
 import streamlit as st
+import json
 
 from . import db
 
@@ -28,8 +29,10 @@ def save_user_photo(user_id: int, uploaded_file) -> Path:
     if ext not in (".png", ".jpg", ".jpeg", ".webp"):
         ext = ".png"
     for old in photo_dir().glob(f"{user_id}.*"):
-        try: old.unlink()
-        except Exception: pass
+        try:
+            old.unlink()
+        except Exception:
+            pass
     out = photo_dir() / f"{user_id}{ext}"
     out.write_bytes(uploaded_file.getbuffer())
     return out
@@ -47,12 +50,13 @@ def title_from_prompt(text: str, max_len: int = 40) -> str:
     t = (text or "").strip().replace("\n", " ")
     return (t[:max_len] + "…") if len(t) > max_len else (t or "Sem título")
 
+
 # ---------- Histórico/estado ----------
 def load_messages_into_state(user_id: int, chat_id: int) -> None:
     ss = st.session_state
     ss["messages"] = []
-    for role, text, _ts in db.load_history(user_id, limit=500, chat_id=chat_id):
-        ss["messages"].append({"role": role, "text": text, "urls": []})
+    for role, text, urls, _ts in db.load_history(user_id, limit=500, chat_id=chat_id):
+        ss["messages"].append({"role": role, "text": text, "urls": urls})
 
 def ensure_chat_selected(user: dict) -> None:
     ss = st.session_state
@@ -67,19 +71,24 @@ def ensure_chat_selected(user: dict) -> None:
         load_messages_into_state(user["id"], ss["selected_chat_id"])
 
 # ---------- RAG ----------
-# Fallback seguro igual ao original (mantemos comportamento)
 try:
     from chatbot.ml import settings as cfg
     from chatbot.ml import rag_pipeline
     from chatbot.ml.rag_pipeline import load_search, search
 except Exception:
     cfg = type("cfg", (), {"TOP_K": 5})
-    def load_search(): return (None, None)
-    def search(*args, **kwargs): return None
+
+    def load_search():
+        return (None, None)
+
+    def search(*args, **kwargs):
+        return None
+
     class _Dummy:
         @staticmethod
         def answer_with_cfg(q, gen_overrides=None, k=5):
             return ("Não consegui consultar o modelo agora. Tente novamente em instantes.", [])
+
     rag_pipeline = _Dummy()
 
 @st.cache_resource(show_spinner=False)
@@ -93,8 +102,10 @@ def unique_urls_in_order(df, limit=5) -> List[str]:
     for _, r in df.iterrows():
         u = (r.get("url") or "").strip()
         if u and u not in seen:
-            seen.add(u); out.append(u)
-        if len(out) >= limit: break
+            seen.add(u)
+            out.append(u)
+        if len(out) >= limit:
+            break
     return out
 
 def call_rag(question: str) -> Tuple[str, List[str], str | None]:
@@ -122,7 +133,7 @@ def send_and_respond(user: dict, question: str):
     with st.spinner("Consultando base e gerando resposta..."):
         answer_text, urls, debug = call_rag(question)
     ss["messages"].append({"role": "assistant", "text": answer_text, "urls": urls})
-    db.save_message(user["id"], "assistant", answer_text, chat_id=ss["selected_chat_id"])
+    db.save_message(user["id"], "assistant", answer_text, chat_id=ss["selected_chat_id"], urls=urls)
 
     chats = db.list_chats(user["id"])
     cur = next((c for c in chats if c["id"] == ss["selected_chat_id"]), None)

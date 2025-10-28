@@ -1,4 +1,3 @@
-# chatbot/ml/embedder.py
 from contextlib import closing
 import sqlite3
 from pathlib import Path

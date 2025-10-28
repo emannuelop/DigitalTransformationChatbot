@@ -14,6 +14,8 @@ SUGGESTED_QUESTIONS = [
     "Quais indicadores posso usar para medir produtividade?",
 ]
 
+# Texto padrão quando não há base
+_NOT_FOUND = "Não encontrei essa informação na base de conhecimento."
 
 def login_screen():
     inject_base_css()
@@ -59,7 +61,6 @@ def login_screen():
                 except Exception as e:
                     st.error(f"Falha ao cadastrar: {e}")
 
-
 def chat_screen(user: dict):
     inject_base_css()
     ss = st.session_state
@@ -74,14 +75,13 @@ def chat_screen(user: dict):
             <div class="hero-wrap">
               <div class="hero">
                 <h1>O que quer fazer hoje?</h1>
-                <p>Pergunte qualquer coisa ou escolha uma sugestão abaixo.</p>
+                <p>Pergunte sobre transformação digital coisa ou escolha uma sugestão abaixo.</p>
               </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-        # ---- Sugestões em um container para poder ocultar no clique
         sugg_box = st.container()
         with sugg_box:
             st.markdown('<div class="sugg">', unsafe_allow_html=True)
@@ -93,24 +93,22 @@ def chat_screen(user: dict):
                     clicked = q
             st.markdown("</div>", unsafe_allow_html=True)
 
-        # Clique em sugestão: some as sugestões, mostra a pergunta, consulta e rerun
         if clicked:
             question = clicked.strip()
-            sugg_box.empty()  # esconde as sugestões imediatamente
-            st.chat_message("user").write(question)  # mostra a pergunta já na tela
-            send_and_respond(user, question)         # salva + spinner + resposta (helpers.py)
-            st.rerun()                               # re-render a partir do histórico
+            sugg_box.empty()
+            st.chat_message("user").write(question)
+            send_and_respond(user, question)
+            st.rerun()
 
-        # Input normal (fixo no rodapé) — mostra a pergunta antes do spinner
         user_prompt = st.chat_input("Pergunte algo sobre a base de conhecimento…")
         if user_prompt:
             question = user_prompt.strip()
-            st.chat_message("user").write(question)  # mostra a pergunta imediatamente
-            send_and_respond(user, question)         # salva + spinner + resposta (helpers.py)
+            st.chat_message("user").write(question)
+            send_and_respond(user, question)
             st.rerun()
         return
 
-    # Conversa existente (renderiza a partir do estado)
+    # Conversa existente
     for msg in ss["messages"]:
         if msg["role"] == "user":
             st.chat_message("user").write(msg["text"])
@@ -118,16 +116,14 @@ def chat_screen(user: dict):
             m = st.chat_message("assistant")
             m.write(msg["text"])
 
-            # ---- Fontes (links) com rótulos abreviados, clicáveis e com quebra automática
-            if msg.get("urls"):
+            # ---- Fontes (links) — mostrar somente se houver urls e NÃO for mensagem de 'não encontrado'
+            if msg.get("urls") and (msg.get("text", "").strip() != _NOT_FOUND):
                 from urllib.parse import urlparse
 
                 def _pretty_label(u: str, max_len: int = 90) -> str:
-                    """Texto curto para mostrar no link; nomes de arquivo permanecem como estão."""
                     if not isinstance(u, str) or not u:
                         return u
                     if not u.startswith(("http://", "https://")):
-                        # Ex.: "MeuArquivo.pdf — fonte (PDF)"
                         return u
                     p = urlparse(u)
                     label = (p.netloc or "") + (p.path or "")
@@ -141,16 +137,13 @@ def chat_screen(user: dict):
                     for u in msg["urls"]:
                         if isinstance(u, str) and u.startswith(("http://", "https://")):
                             label = _pretty_label(u)
-                            # Usa APENAS Markdown (sem HTML) para o link ser clicável
                             st.markdown(f"- [{label}]({u})")
                         else:
-                            # Nomes de PDFs (ex.: upload) vão como texto simples
                             st.markdown(f"- {u}")
 
-    # Input contínuo — mostra a pergunta antes do spinner
     user_prompt = st.chat_input("Pergunte algo sobre a base de conhecimento…")
     if user_prompt and ss.get("selected_chat_id") is not None:
         question = user_prompt.strip()
-        st.chat_message("user").write(question)  # mostra a pergunta imediatamente
-        send_and_respond(user, question)         # salva + spinner + resposta (helpers.py)
+        st.chat_message("user").write(question)
+        send_and_respond(user, question)
         st.rerun()

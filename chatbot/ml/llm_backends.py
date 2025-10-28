@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional, List, Dict, Any
 import time
 import requests
@@ -44,8 +44,12 @@ class LMStudioBackend:
         except Exception:
             pass
 
-    def generate(self, prompt: str, system: Optional[str] = None,
-                 cfg: GenerationConfig = GenerationConfig()) -> str:
+    def generate(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        cfg: GenerationConfig = GenerationConfig(),
+    ) -> str:
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -62,7 +66,7 @@ class LMStudioBackend:
         if cfg.stop:
             payload["stop"] = cfg.stop
 
-        last_err = None
+        last_err: Optional[Exception] = None
         for _ in range(max(1, cfg.retries)):
             try:
                 r = requests.post(self.url, json=payload, timeout=cfg.timeout_s)

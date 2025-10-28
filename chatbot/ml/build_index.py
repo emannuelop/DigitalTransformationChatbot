@@ -1,4 +1,3 @@
-# chatbot/ml/build_index.py
 import numpy as np
 import faiss
 from pathlib import Path

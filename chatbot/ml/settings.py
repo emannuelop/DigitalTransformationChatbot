@@ -1,3 +1,4 @@
+# chatbot/ml/settings.py
 from __future__ import annotations
 from pathlib import Path
 
@@ -16,31 +17,47 @@ SBERT_MODEL: str       = "paraphrase-multilingual-MiniLM-L12-v2"
 SBERT_BATCH: int       = 32
 SBERT_NORMALIZE: bool  = True
 
-# Chunks (menores = prompt mais rápido)
+# Chunks
 CHUNK_SIZE_CHARS: int    = 1000
 CHUNK_OVERLAP_CHARS: int = 150
 MAX_CHARS_PER_CHUNK: int = 900
 
-# Recuperação
-TOP_K: int          = 2
-SCORE_CUTOFF: float = 0.00
+# Recuperação (mais rígido para evitar “falsos positivos”)
+TOP_K: int          = 6
+SCORE_CUTOFF: float = 0.30  # ↑ mais estrito
+
+# Reranking híbrido (vetorial + léxico)
+HYBRID_LAMBDA: float = 0.25  # 0 = só vetorial; 1 = só léxico
 
 # LM Studio
 LMSTUDIO_HOST: str  = "http://127.0.0.1:1234"
-# Mais rápido que o reasoning:
 LMSTUDIO_MODEL: str = "ibm/granite-4-h-tiny"
 
-# Geração (o pipeline ajusta max_tokens dinamicamente até 1000)
-GEN_TEMPERATURE: float = 0.15
-GEN_TOP_P: float       = 0.90
-GEN_MAX_TOKENS: int    = 450
-GEN_TIMEOUT_S: int     = 240   # tempo maior evita timeout em cold start
+# Geração (mais determinística para respostas consistentes)
+GEN_TEMPERATURE: float = 0.05
+GEN_TOP_P: float       = 0.75
+GEN_MAX_TOKENS: int    = 1024
+GEN_TIMEOUT_S: int     = 240
 GEN_RETRIES: int       = 2
 GEN_BACKOFF_S: float   = 1.5
 GEN_STOP: list[str] | None = None
 
 # Força PT-BR sempre
 FORCE_PT_BR: bool = True
+
+# Controle de resposta
+ANSWER_SENTINEL: str     = "<FIM/>"
+CONTINUE_MAX_ROUNDS: int = 3
+MIN_GENERATION_CHARS: int = 500
+
+# Judge
+JUDGE_ANSWERABILITY: bool = True
+JUDGE_MAX_TOKENS: int     = 4
+
+# Relevância léxica (gates determinísticos)
+KEYWORD_MIN_LEN: int        = 5
+KEYWORD_MIN_HITS: int       = 2
+MIN_ANSWER_COVERAGE: float  = 0.10
 
 def _validate() -> None:
     for p in (DATA_DIR, ART_DIR):

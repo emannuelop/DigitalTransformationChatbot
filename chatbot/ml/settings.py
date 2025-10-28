@@ -1,4 +1,3 @@
-# chatbot/ml/settings.py
 from __future__ import annotations
 from pathlib import Path
 
@@ -42,16 +41,23 @@ GEN_RETRIES: int       = 2
 GEN_BACKOFF_S: float   = 1.5
 GEN_STOP: list[str] | None = None
 
+# Domain guard (tema padrão do produto)
+DOMAIN_GUARD_STRICT: bool = True            # mantém foco em setor público por padrão
+# Bypass quando o contexto for de PDF enviado pelo usuário
+USER_UPLOAD_BYPASS_GUARD: bool = True       # permite “tema livre” quando a fonte é user_sources
+MIN_ANSWER_COVERAGE_USER: float = 0.05      # cobertura mínima quando for PDF do usuário (mais suave)
+
 # Força PT-BR sempre
-FORCE_PT_BR: bool = True
+FORCE_PT_BR: bool = False
 
 # Controle de resposta
-ANSWER_SENTINEL: str     = "<FIM/>"
-CONTINUE_MAX_ROUNDS: int = 3
-MIN_GENERATION_CHARS: int = 500
+ANSWER_SENTINEL: str      = "<FIM/>"
+CONTINUE_MAX_ROUNDS: int  = 3
+MIN_GENERATION_CHARS: int = 500            # padrão (domínio transformação digital)
+MIN_GENERATION_CHARS_USER: int = 180       # mínimo mais curto para PDF do usuário
 
-# Judge
-JUDGE_ANSWERABILITY: bool = True
+# Judge (desligado)
+JUDGE_ANSWERABILITY: bool = False
 JUDGE_MAX_TOKENS: int     = 4
 
 # Relevância léxica (gates determinísticos)

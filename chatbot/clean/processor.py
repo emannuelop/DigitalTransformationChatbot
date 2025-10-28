@@ -1,4 +1,3 @@
-# clean/processor.py
 import logging
 import re
 import sqlite3
@@ -7,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+import joblib
 import numpy as np
 import pandas as pd
 from langdetect import DetectorFactory, detect
@@ -15,10 +15,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 from unidecode import unidecode
 
-# ------------------------------------------------------------------------------
-# Caminhos (mantidos compatíveis com ml/settings.py)
-# ------------------------------------------------------------------------------
-BASE_DIR: Path = Path(__file__).resolve().parent.parent
+BASE_DIR: Path = Path(__file__).resolve().parent.parent         
 RAW_DB:   Path = BASE_DIR / "extraction" / "data" / "knowledge_base.db"
 
 DATA_DIR: Path = BASE_DIR / "data"
@@ -29,16 +26,15 @@ PROC_DB: Path = DATA_DIR / "knowledge_base_processed.db"
 ART_DIR:  Path = DATA_DIR / "artifacts"
 ART_DIR.mkdir(parents=True, exist_ok=True)
 
-# ------------------------------------------------------------------------------
-# Parâmetros de processamento
-# ------------------------------------------------------------------------------
-MIN_WORDS     = 80
-SIM_THRESHOLD = 0.92
-LOG_LEVEL     = "INFO"
+MIN_WORDS       = 80
+SIM_THRESHOLD   = 0.92
+USE_SBERT       = True
+SBERT_MODEL     = "paraphrase-multilingual-MiniLM-L12-v2"
+SBERT_BATCH     = 32
+LOG_LEVEL       = "INFO"
 
-DetectorFactory.seed = 42
+DetectorFactory.seed = 42  
 
-# Categorias simples por palavra-chave (mantido)
 CATEGORIES: Dict[str, List[str]] = {
     "estrategia":       ["estrategia", "governanca", "maturidade", "planejamento", "roadmap"],
     "dados_ia":         ["dados", "ia", "inteligencia artificial", "machine learning", "analytics", "algoritmo"],
@@ -57,13 +53,10 @@ PT_STOP = {
     "te","tem","têm","um","uma","você","vocês"
 }
 
-_RX_PUNCT      = re.compile(r"[^\w\s]", re.UNICODE)
-_RX_SPACES     = re.compile(r"\s+")
-_RX_ACCENT_PT  = re.compile(r"[ãõáéíóúâêîôûç]", re.IGNORECASE)
+_RX_PUNCT  = re.compile(r"[^\w\s]", re.UNICODE)
+_RX_SPACES = re.compile(r"\s+")
+_RX_ACCENT_PT = re.compile(r"[ãõáéíóúâêîôûç]", re.IGNORECASE)
 
-# ------------------------------------------------------------------------------
-# Utilitários
-# ------------------------------------------------------------------------------
 def setup_logging(level: str = "INFO") -> None:
     logging.basicConfig(level=getattr(logging, level.upper(), logging.INFO),
                         format="[%(levelname)s] %(message)s")
@@ -113,13 +106,10 @@ def hash_text(text: str) -> str:
     import hashlib
     return hashlib.blake2b(text.encode("utf-8"), digest_size=16).hexdigest()
 
-# ------------------------------------------------------------------------------
-# Carregamento bruto e filtros
-# ------------------------------------------------------------------------------
 def fetch_raw_pdfs(conn: sqlite3.Connection, min_words: int) -> pd.DataFrame:
     cols = pd.read_sql_query("PRAGMA table_info(documents);", conn)["name"].tolist()
     select_cols = ["id AS original_id", "url", "content"]
-    if "content_type" in cols:  # compatível com esquemas mais novos
+    if "content_type" in cols:  
         select_cols.append("content_type")
 
     df = pd.read_sql_query(f"SELECT {', '.join(select_cols)} FROM documents", conn)
@@ -127,9 +117,6 @@ def fetch_raw_pdfs(conn: sqlite3.Connection, min_words: int) -> pd.DataFrame:
     wc = df["content"].apply(lambda s: len(re.findall(r"\w+", s)))
     return df[(wc >= min_words) & (df["content"].str.len() > 0)].copy()
 
-# ------------------------------------------------------------------------------
-# Deduplicação por hashing + similaridade (char n-grams via TF-IDF — local/temporário)
-# ------------------------------------------------------------------------------
 def deduplicate(df_clean: pd.DataFrame, sim_threshold: float = 0.92) -> Tuple[pd.DataFrame, pd.DataFrame]:
     df = df_clean.copy()
     df["text_hash"] = df["content_clean"].apply(hash_text)
@@ -180,9 +167,30 @@ def deduplicate(df_clean: pd.DataFrame, sim_threshold: float = 0.92) -> Tuple[pd
     dup_map = pd.DataFrame(dup_rows, columns=["original_id", "kept_original_id"])
     return df_final, dup_map
 
-# ------------------------------------------------------------------------------
-# Persistência no DB processado (esquema esperado pelo embedder.py)
-# ------------------------------------------------------------------------------
+def build_tfidf(df: pd.DataFrame) -> None:
+    vectorizer = TfidfVectorizer(max_features=100_000, ngram_range=(1, 2), min_df=2)
+    X = vectorizer.fit_transform(df["content_clean"])
+    joblib.dump(vectorizer, ART_DIR / "tfidf_vectorizer.pkl")
+    from scipy import sparse
+    sparse.save_npz(ART_DIR / "tfidf_matrix.npz", X)
+    logging.info("[emb] TF-IDF: %s salvo em %s", X.shape, ART_DIR)
+
+def build_sbert(df: pd.DataFrame, model_name: str, batch: int = 32) -> None:
+    if not USE_SBERT:
+        logging.info("[emb] SBERT desativado.")
+        return
+    try:
+        from sentence_transformers import SentenceTransformer
+    except Exception as e:
+        logging.warning("[emb] SBERT indisponível (%s). Pulei.", e)
+        return
+    model = SentenceTransformer(model_name)
+    embs = model.encode(df["content_clean"].tolist(),
+                        convert_to_numpy=True, show_progress_bar=True, batch_size=batch)
+    np.save(ART_DIR / "sbert_embeddings.npy", embs)
+    (ART_DIR / "sbert_model.txt").write_text(model_name, encoding="utf-8")
+    logging.info("[emb] SBERT: %s salvo em %s", embs.shape, ART_DIR)
+
 def init_schema(conn: sqlite3.Connection) -> None:
     cur = conn.cursor()
     cur.execute("""
@@ -233,9 +241,6 @@ def upsert_processed(conn: sqlite3.Connection, df: pd.DataFrame, dup_map: pd.Dat
 
     conn.commit()
 
-# ------------------------------------------------------------------------------
-# Orquestração
-# ------------------------------------------------------------------------------
 def run() -> None:
     setup_logging(LOG_LEVEL)
     ensure_raw_db()
@@ -277,10 +282,13 @@ def run() -> None:
         kept_df, dup_map = deduplicate(clean_df, sim_threshold=SIM_THRESHOLD)
         upsert_processed(proc, kept_df, dup_map)
 
-        # Sem TF-IDF/SBERT aqui: embeddings e FAISS são tratados em ml/embedder.py e ml/build_index.py
+        build_tfidf(kept_df)
+        build_sbert(kept_df, SBERT_MODEL, SBERT_BATCH)
+
         n_raw  = raw.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
         n_proc = proc.execute("SELECT COUNT(*) FROM processed_documents").fetchone()[0]
-        logging.info("[ok] brutos=%d | processados=%d | db=%s", n_raw, n_proc, PROC_DB)
+        logging.info("[ok] brutos=%d | processados=%d | db=%s | artifacts=%s",
+                     n_raw, n_proc, PROC_DB, ART_DIR)
 
 if __name__ == "__main__":
     run()

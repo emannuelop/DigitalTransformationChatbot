@@ -12,6 +12,37 @@ def render_sidebar(user: dict) -> None:
     with st.sidebar:
         inject_base_css()  # tema + ajustes
 
+                # --- PESQUISAR CHAT (fica acima de "Novo chat") ---
+        with st.popover("🔎 Pesquisar chat", use_container_width=True):
+            # Wrapper p/ CSS
+            st.markdown('<div class="sb-search">', unsafe_allow_html=True)
+
+            q = st.text_input(
+                "Procurar pelo título",
+                key="sb_search_q",
+                placeholder="Digite parte do nome…",
+            )
+
+            # Resultados (com fallback para recentes quando vazio)
+            if q and q.strip():
+                results = db.search_chats(user["id"], q.strip(), limit=30)
+                if not results:
+                    st.caption("Nenhum chat encontrado.")
+            else:
+                st.caption("Recentes")
+                results = db.list_chats(user["id"], limit=10)
+
+            st.markdown('<div class="sb-search-results">', unsafe_allow_html=True)
+            for chat in results:
+                if st.button(chat["title"], key=f"sr_{chat['id']}", use_container_width=True):
+                    st.session_state["selected_chat_id"] = chat["id"]
+                    load_messages_into_state(user["id"], chat["id"])
+                    st.session_state["page"] = "chat"
+                    st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)  # fecha .sb-search-results
+            st.markdown("</div>", unsafe_allow_html=True)  # fecha .sb-search
+
+
         # Novo chat
         if st.button("Novo chat", use_container_width=True):
             cid = db.create_chat(user["id"], "Novo chat")

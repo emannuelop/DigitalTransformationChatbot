@@ -12,6 +12,20 @@ def base_css(sidebar_hidden: bool = False) -> str:
         letter-spacing: .01em;
       }}
 
+      /* ===== Sidebar: busca de chats ===== */
+      .sb-search .stTextInput > div > div > input {{
+        height: 36px !important;
+      }}
+      .sb-search-results {{
+        max-height: 320px;        /* rolagem quando muitos resultados */
+        overflow: auto;
+        margin-top: .25rem;
+      }}
+      @media (max-width: 680px) {{
+        .sb-search-results {{ max-height: 45vh; }}
+      }}
+
+
       :root {{
         --pad: 0.75rem;
         --radius: 14px;

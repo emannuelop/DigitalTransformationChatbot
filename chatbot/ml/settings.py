@@ -62,7 +62,7 @@ JUDGE_MAX_TOKENS: int     = 4
 
 # Relevância léxica (gates determinísticos)
 KEYWORD_MIN_LEN: int        = 5
-KEYWORD_MIN_HITS: int       = 2
+KEYWORD_MIN_HITS: int       = 1
 MIN_ANSWER_COVERAGE: float  = 0.10
 
 def _validate() -> None:

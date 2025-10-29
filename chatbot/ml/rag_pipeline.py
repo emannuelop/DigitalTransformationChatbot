@@ -282,9 +282,9 @@ def answer_with_cfg(
     min_len_required = (MIN_GENERATION_CHARS_USER if use_user_mode else MIN_GENERATION_CHARS)
 
     # Gate 1.5 — só aplica quando NÃO estamos em modo user-upload
-    if not use_user_mode:
-        if not _context_is_relevant(question, blocks):
-            return NOT_FOUND_TEXT, urls, "Gate1.5: contexto recuperado não é lexicalmente relevante para a pergunta."
+    #if not use_user_mode:
+    #    if not _context_is_relevant(question, blocks):
+    #       return NOT_FOUND_TEXT, urls, "Gate1.5: contexto recuperado não é lexicalmente relevante para a pergunta."
 
     # Config de geração
     need_tokens = _estimate_tokens(question, blocks)

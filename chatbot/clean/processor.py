@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-import joblib
 import numpy as np
 import pandas as pd
 from langdetect import DetectorFactory, detect
@@ -107,6 +106,10 @@ def hash_text(text: str) -> str:
     return hashlib.blake2b(text.encode("utf-8"), digest_size=16).hexdigest()
 
 def fetch_raw_pdfs(conn: sqlite3.Connection, min_words: int) -> pd.DataFrame:
+    """
+    Busca documentos do banco RAW (knowledge_base.db).
+    Compatível com a nova coluna user_id em user_sources (não afeta esta query).
+    """
     cols = pd.read_sql_query("PRAGMA table_info(documents);", conn)["name"].tolist()
     select_cols = ["id AS original_id", "url", "content"]
     if "content_type" in cols:  
@@ -118,6 +121,10 @@ def fetch_raw_pdfs(conn: sqlite3.Connection, min_words: int) -> pd.DataFrame:
     return df[(wc >= min_words) & (df["content"].str.len() > 0)].copy()
 
 def deduplicate(df_clean: pd.DataFrame, sim_threshold: float = 0.92) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Remove duplicatas exatas e quase-duplicatas usando TF-IDF.
+    NOTA: TF-IDF aqui é usado APENAS para deduplicação, não para o RAG.
+    """
     df = df_clean.copy()
     df["text_hash"] = df["content_clean"].apply(hash_text)
 
@@ -127,6 +134,7 @@ def deduplicate(df_clean: pd.DataFrame, sim_threshold: float = 0.92) -> Tuple[pd
 
     to_drop: set[int] = set()
     if len(df_kept) >= 3:
+        # TF-IDF usado APENAS para detectar duplicatas (não salvo em disco)
         vec = TfidfVectorizer(analyzer="char", ngram_range=(3, 5), min_df=2)
         X = vec.fit_transform(df_kept["content_clean"])
         if X.shape[0] >= 2 and X.nnz > 0:
@@ -167,15 +175,14 @@ def deduplicate(df_clean: pd.DataFrame, sim_threshold: float = 0.92) -> Tuple[pd
     dup_map = pd.DataFrame(dup_rows, columns=["original_id", "kept_original_id"])
     return df_final, dup_map
 
-def build_tfidf(df: pd.DataFrame) -> None:
-    vectorizer = TfidfVectorizer(max_features=100_000, ngram_range=(1, 2), min_df=2)
-    X = vectorizer.fit_transform(df["content_clean"])
-    joblib.dump(vectorizer, ART_DIR / "tfidf_vectorizer.pkl")
-    from scipy import sparse
-    sparse.save_npz(ART_DIR / "tfidf_matrix.npz", X)
-    logging.info("[emb] TF-IDF: %s salvo em %s", X.shape, ART_DIR)
+# REMOVIDO: build_tfidf() - não é usado no RAG
+# O TF-IDF é usado apenas internamente na função deduplicate() acima
 
 def build_sbert(df: pd.DataFrame, model_name: str, batch: int = 32) -> None:
+    """
+    Gera embeddings SBERT (usado no RAG).
+    Compatível com documentos de qualquer usuário (user_id não afeta).
+    """
     if not USE_SBERT:
         logging.info("[emb] SBERT desativado.")
         return
@@ -184,6 +191,8 @@ def build_sbert(df: pd.DataFrame, model_name: str, batch: int = 32) -> None:
     except Exception as e:
         logging.warning("[emb] SBERT indisponível (%s). Pulei.", e)
         return
+    
+    logging.info("[emb] Gerando embeddings SBERT para %d documentos...", len(df))
     model = SentenceTransformer(model_name)
     embs = model.encode(df["content_clean"].tolist(),
                         convert_to_numpy=True, show_progress_bar=True, batch_size=batch)
@@ -192,6 +201,10 @@ def build_sbert(df: pd.DataFrame, model_name: str, batch: int = 32) -> None:
     logging.info("[emb] SBERT: %s salvo em %s", embs.shape, ART_DIR)
 
 def init_schema(conn: sqlite3.Connection) -> None:
+    """
+    Cria schema do banco processado.
+    NÃO precisa de user_id aqui (fica apenas no banco RAW).
+    """
     cur = conn.cursor()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS processed_documents(
@@ -215,6 +228,10 @@ def init_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 def upsert_processed(conn: sqlite3.Connection, df: pd.DataFrame, dup_map: pd.DataFrame) -> None:
+    """
+    Salva documentos processados no banco.
+    Compatível com documentos de qualquer usuário.
+    """
     init_schema(conn)
     cur = conn.cursor()
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -242,6 +259,10 @@ def upsert_processed(conn: sqlite3.Connection, df: pd.DataFrame, dup_map: pd.Dat
     conn.commit()
 
 def run() -> None:
+    """
+    Processa TODOS os documentos do banco RAW (base global + PDFs de usuários).
+    Compatível com a nova coluna user_id (não afeta o processamento).
+    """
     setup_logging(LOG_LEVEL)
     ensure_raw_db()
 
@@ -282,7 +303,8 @@ def run() -> None:
         kept_df, dup_map = deduplicate(clean_df, sim_threshold=SIM_THRESHOLD)
         upsert_processed(proc, kept_df, dup_map)
 
-        build_tfidf(kept_df)
+        # REMOVIDO: build_tfidf() - não é usado no RAG
+        # Apenas SBERT é gerado (usado pelo embedder e RAG)
         build_sbert(kept_df, SBERT_MODEL, SBERT_BATCH)
 
         n_raw  = raw.execute("SELECT COUNT(*) FROM documents").fetchone()[0]

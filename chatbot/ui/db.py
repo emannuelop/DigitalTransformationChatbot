@@ -214,6 +214,26 @@ def update_user_password(user_id: int, current_password: str, new_password: str)
     with get_conn() as c:
         c.execute("UPDATE users SET password_hash=? WHERE id=?;", (new_hash, user_id))
 
+def search_chats(user_id: int, query: str, limit: int = 50) -> List[Dict]:
+    """
+    Busca chats pelo título (case-insensitive), ordenando por 'updated_at' (mais recentes primeiro).
+    """
+    q = f"%{(query or '').strip()}%"
+    with get_conn() as c:
+        cur = c.execute(
+            """
+            SELECT id, title, created_at, updated_at
+            FROM chats
+            WHERE user_id=? AND title LIKE ? COLLATE NOCASE
+            ORDER BY updated_at DESC
+            LIMIT ?;
+            """,
+            (user_id, q, limit),
+        )
+        return [
+            {"id": r[0], "title": r[1], "created_at": r[2], "updated_at": r[3]}
+            for r in cur.fetchall()
+        ]
 
 # ---------- Chats & Mensagens ----------
 def create_chat(user_id: int, title: str = "Novo chat") -> int:

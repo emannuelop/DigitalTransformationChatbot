@@ -17,41 +17,51 @@ from extraction.scraping import (
 # Tabela auxiliar para gerenciar "Minhas fontes" (renomear/excluir)
 # --------------------------------------------------------------------
 
+def _columns_in_table(conn: sqlite3.Connection, table: str) -> set[str]:
+    cols = set()
+    try:
+        for row in conn.execute(f"PRAGMA table_info({table})").fetchall():
+            cols.add(row[1])
+    except sqlite3.OperationalError: # Tabela não existe
+        pass
+    return cols
+
 def _ensure_user_sources_table(conn: sqlite3.Connection) -> None:
-    conn.execute("""
+    cur = conn.cursor()
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS user_sources (
             doc_id       INTEGER PRIMARY KEY,
+            user_id      INTEGER NOT NULL, -- Novo campo
             display_name TEXT NOT NULL,
             created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(doc_id) REFERENCES documents(id) ON DELETE CASCADE
         )
     """)
+    # Adicionar user_id se não existir (para migração)
+    if "user_id" not in _columns_in_table(conn, "user_sources"):
+        # NOTA: Não podemos adicionar NOT NULL em ALTER TABLE, mas o código fará o UPGRADE
+        # Inserindo um valor temporário para evitar erros em inserts futuros
+        cur.execute("ALTER TABLE user_sources ADD COLUMN user_id INTEGER DEFAULT 0;")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_user_sources_user_id ON user_sources(user_id);")
+    
     conn.commit()
 
 def _get_doc_id_by_url(conn: sqlite3.Connection, url: str) -> int | None:
     row = conn.execute("SELECT id FROM documents WHERE url = ? ORDER BY id DESC LIMIT 1", (url,)).fetchone()
     return int(row[0]) if row else None
 
-def _upsert_user_source(conn: sqlite3.Connection, doc_id: int, display_name: str) -> None:
+def _upsert_user_source(conn: sqlite3.Connection, doc_id: int, user_id: int, display_name: str) -> None:
     _ensure_user_sources_table(conn)
     conn.execute("""
-        INSERT INTO user_sources (doc_id, display_name)
-        VALUES (?, ?)
+        INSERT INTO user_sources (doc_id, user_id, display_name)
+        VALUES (?, ?, ?)
         ON CONFLICT(doc_id) DO UPDATE SET display_name=excluded.display_name
-    """, (doc_id, display_name))
+    """, (doc_id, user_id, display_name))
     conn.commit()
 
-def _columns_in_table(conn: sqlite3.Connection, table: str) -> set[str]:
-    cols = set()
-    for row in conn.execute(f"PRAGMA table_info({table})").fetchall():
-        cols.add(row[1])
-    return cols
-
-def list_user_sources() -> List[Dict[str, Any]]:
+def list_user_sources(user_id: int) -> List[Dict[str, Any]]:
     """
-    Retorna a lista de fontes adicionadas via UI (mapeadas em user_sources),
-    de forma compatível com esquemas diferentes da tabela documents.
-    Se 'wc' ou 'num_pages' não existirem no schema, retornamos None nesses campos.
+    Retorna a lista de fontes adicionadas pelo usuário (mapeadas em user_sources).
     """
     conn = init_db(DB_PATH)
     _ensure_user_sources_table(conn)
@@ -65,50 +75,55 @@ def list_user_sources() -> List[Dict[str, Any]]:
     else:
         select_bits.append("NULL AS num_pages")
 
-    if "wc" in dcols:
-        select_bits.append("d.wc")
+    if "word_count" in dcols: # Corrigido para 'word_count'
+        select_bits.append("d.word_count")
     else:
-        select_bits.append("NULL AS wc")
+        select_bits.append("NULL AS word_count")
 
     select_sql = ", ".join(select_bits)
+    
+    # Filtra por user_id
     rows = conn.execute(f"""
         SELECT {select_sql}, us.created_at
         FROM user_sources us
         JOIN documents d ON d.id = us.doc_id
+        WHERE us.user_id = ?
         ORDER BY us.created_at DESC, us.doc_id DESC
-    """).fetchall()
+    """, (user_id,)).fetchall()
     conn.close()
 
     out = []
     for r in rows:
-        # Ordem: doc_id, display_name, url, title, num_pages, wc, created_at
+        # Ordem: doc_id, display_name, url, title, num_pages, word_count, created_at
         out.append({
             "doc_id": int(r[0]),
             "display_name": r[1],
             "url": r[2],
             "title": r[3],
             "num_pages": r[4],
-            "wc": r[5],
+            "wc": r[5], # wc é o alias para word_count
             "created_at": r[6],
         })
     return out
 
-def rename_user_source(doc_id: int, new_name: str) -> None:
+def rename_user_source(user_id: int, doc_id: int, new_name: str) -> None:
     conn = init_db(DB_PATH)
     _ensure_user_sources_table(conn)
-    conn.execute("UPDATE user_sources SET display_name=? WHERE doc_id=?", (new_name.strip(), int(doc_id)))
+    # Renomeia APENAS se o doc_id pertencer ao user_id
+    conn.execute("UPDATE user_sources SET display_name=? WHERE doc_id=? AND user_id=?", (new_name.strip(), int(doc_id), user_id))
     conn.commit()
     conn.close()
 
-def delete_user_source(doc_id: int) -> None:
+def delete_user_source(user_id: int, doc_id: int) -> None:
     """
     Remove a fonte do usuário e o documento bruto correspondente.
-    (Depois do delete, rode processor->embedder->build_index para refletir no índice.)
     """
     conn = init_db(DB_PATH)
     _ensure_user_sources_table(conn)
-    conn.execute("DELETE FROM user_sources WHERE doc_id=?", (int(doc_id),))
-    conn.execute("DELETE FROM documents WHERE id=?", (int(doc_id),))
+    # Remove da user_sources APENAS se pertencer ao user_id
+    conn.execute("DELETE FROM user_sources WHERE doc_id=? AND user_id=?", (int(doc_id), user_id))
+    # Remove do documents APENAS se pertencer ao user_id (segurança extra)
+    conn.execute("DELETE FROM documents WHERE id=? AND user_id=?", (int(doc_id), user_id)) 
     conn.commit()
     conn.close()
 
@@ -116,7 +131,7 @@ def delete_user_source(doc_id: int) -> None:
 # Ingestão SEM filtros (upload/URL) — grava SÓ o conteúdo no DB bruto
 # --------------------------------------------------------------------
 
-def _save_pdf_bytes(conn, url: str, raw: bytes, msgs: list[str], display_name: str) -> Dict[str, Any] | None:
+def _save_pdf_bytes(conn, user_id: int, url: str, raw: bytes, msgs: list[str], display_name: str) -> Dict[str, Any] | None:
     """
     Extrai texto e salva SEM filtros (sem MIN_WORDS/MIN_SCORE).
     Também registra a fonte em user_sources para permitir renomear/excluir.
@@ -130,18 +145,18 @@ def _save_pdf_bytes(conn, url: str, raw: bytes, msgs: list[str], display_name: s
     wc = word_count(text)
     sscore = soft_score(text)
 
-    # Persiste conteúdo bruto
-    save_document(conn, url, title, num_pages, wc, sscore, text)
+    # Persiste conteúdo bruto (agora com user_id)
+    save_document(conn, url, title, num_pages, wc, sscore, text, user_id=user_id)
 
     # Mapeia em user_sources (para CRUD na UI)
     doc_id = _get_doc_id_by_url(conn, url)
     if doc_id is not None:
-        _upsert_user_source(conn, doc_id, display_name=display_name or (title or url))
+        _upsert_user_source(conn, doc_id, user_id, display_name=display_name or (title or url))
 
     msgs.append(f"[OK] Salvo: {url} (pgs={num_pages} | wc={wc} | score={sscore})")
     return {"doc_id": doc_id, "display_name": display_name or (title or url), "url": url, "title": title}
 
-def ingest_uploaded_pdfs_unfiltered(pdfs: Iterable[Tuple[str, bytes]] | None) -> Dict[str, Any]:
+def ingest_uploaded_pdfs_unfiltered(user_id: int, pdfs: Iterable[Tuple[str, bytes]] | None) -> Dict[str, Any]:
     """
     Recebe uploads [(nome, bytes)], salva no DB BRUTO SEM filtros e registra em user_sources.
     NÃO salva o PDF em disco — apenas o conteúdo (texto) no banco.
@@ -158,7 +173,7 @@ def ingest_uploaded_pdfs_unfiltered(pdfs: Iterable[Tuple[str, bytes]] | None) ->
     for name, raw in pdfs:
         url = normalize_url(f"upload://{name}")
         try:
-            inserted = _save_pdf_bytes(conn, url, raw, msgs, display_name=name)
+            inserted = _save_pdf_bytes(conn, user_id, url, raw, msgs, display_name=name)
             if inserted:
                 added_items.append(inserted)
                 added += 1
@@ -170,7 +185,7 @@ def ingest_uploaded_pdfs_unfiltered(pdfs: Iterable[Tuple[str, bytes]] | None) ->
     conn.close()
     return {"messages": msgs, "added": added, "skipped": skipped, "items": added_items}
 
-def ingest_urls_unfiltered(urls: Iterable[str] | None) -> Dict[str, Any]:
+def ingest_urls_unfiltered(user_id: int, urls: Iterable[str] | None) -> Dict[str, Any]:
     """
     Recebe URLs do usuário e salva PDFs SEM filtros de host/termos/word_count.
     - Se for página HTML, captura TODOS os links .pdf e salva.
@@ -217,7 +232,7 @@ def ingest_urls_unfiltered(urls: Iterable[str] | None) -> Dict[str, Any]:
                             continue
                         raw = http_get_bytes(session, pdf_url)
                         inserted = _save_pdf_bytes(
-                            conn, pdf_url, raw, msgs,
+                            conn, user_id, pdf_url, raw, msgs,
                             display_name=Path(pdf_url).name or "arquivo.pdf",
                         )
                         if inserted:
@@ -240,7 +255,7 @@ def ingest_urls_unfiltered(urls: Iterable[str] | None) -> Dict[str, Any]:
                 try:
                     raw = http_get_bytes(session, u)
                     inserted = _save_pdf_bytes(
-                        conn, u, raw, msgs,
+                        conn, user_id, u, raw, msgs,
                         display_name=Path(u).name or "arquivo.pdf",
                     )
                     if inserted:

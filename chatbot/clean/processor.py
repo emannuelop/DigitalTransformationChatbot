@@ -114,6 +114,10 @@ def fetch_raw_pdfs(conn: sqlite3.Connection, min_words: int) -> pd.DataFrame:
     select_cols = ["id AS original_id", "url", "content"]
     if "content_type" in cols:  
         select_cols.append("content_type")
+    if "user_id" in cols:
+        select_cols.append("user_id")
+    else:
+        select_cols.append("NULL AS user_id") # Para compatibilidade
 
     df = pd.read_sql_query(f"SELECT {', '.join(select_cols)} FROM documents", conn)
     df["content"] = df["content"].fillna("")
@@ -216,7 +220,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
             content_clean TEXT,
             content_len INTEGER,
             text_hash TEXT,
-            processed_at TEXT
+            processed_at TEXT,
+            user_id INTEGER -- NULL para documentos globais, ID para documentos de usuário
         )
     """)
     cur.execute("""
@@ -225,6 +230,11 @@ def init_schema(conn: sqlite3.Connection) -> None:
             kept_original_id INTEGER
         )
     """)
+    # Adicionar user_id à processed_documents se não existir (para migração)
+    cols = pd.read_sql_query("PRAGMA table_info(processed_documents);", conn)["name"].tolist()
+    if "user_id" not in cols:
+        cur.execute("ALTER TABLE processed_documents ADD COLUMN user_id INTEGER;")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_processed_documents_user_id ON processed_documents(user_id);")
     conn.commit()
 
 def upsert_processed(conn: sqlite3.Connection, df: pd.DataFrame, dup_map: pd.DataFrame) -> None:
@@ -239,15 +249,15 @@ def upsert_processed(conn: sqlite3.Connection, df: pd.DataFrame, dup_map: pd.Dat
     rows = (
         (
             int(r.original_id), r.url, r.lang, r.category, r.content_clean,
-            int(len(r.content_clean)), getattr(r, "text_hash", hash_text(r.content_clean)), now_iso
+            int(len(r.content_clean)), getattr(r, "text_hash", hash_text(r.content_clean)), now_iso, r.user_id
         )
         for r in df.itertuples(index=False)
     )
 
     cur.executemany("""
         INSERT OR REPLACE INTO processed_documents
-        (original_id, url, lang, category, content_clean, content_len, text_hash, processed_at)
-        VALUES (?,?,?,?,?,?,?,?)
+        (original_id, url, lang, category, content_clean, content_len, text_hash, processed_at, user_id)
+        VALUES (?,?,?,?,?,?,?,?,?)
     """, rows)
 
     if not dup_map.empty:
@@ -292,6 +302,7 @@ def run() -> None:
                 "lang": "pt",
                 "content_clean": t1,
                 "category": categorize(t1),
+                "user_id": rec["user_id"] # Adicionar user_id
             })
 
         logging.info("[lang] descartados por idioma != pt: %d", dropped_lang)

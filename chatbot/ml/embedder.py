@@ -1,6 +1,5 @@
 from contextlib import closing
 import sqlite3
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -41,10 +40,22 @@ def main() -> None:
     rows = []
     for _, r in tqdm(base.iterrows(), total=len(base), desc="chunking", unit="doc"):
         for ck in chunk_text(r["content_clean"], CHUNK_SIZE_CHARS, CHUNK_OVERLAP_CHARS):
-            rows.append({"original_id": int(r["original_id"]), "url": r["url"], "text": ck})
+            rows.append({
+                "original_id": int(r["original_id"]),
+                "url": r["url"],
+                "text": ck
+            })
 
-    map_df = pd.DataFrame(rows)
-    assert not map_df.empty, "Nenhum chunk gerado — confira o banco processado."
+    if not rows:
+        raise RuntimeError("Nenhum chunk gerado — confira o banco processado.")
+
+    # Mapping: RangeIndex corresponde à ordem de embeddings/FAISS
+    map_df = pd.DataFrame(rows, copy=False)
+
+    # >>> Novo: compatível com filtro multiusuário do rag_pipeline.search()
+    # Mantemos como float (NaN) para permitir .isna()
+    if "user_id" not in map_df.columns:
+        map_df["user_id"] = np.nan
 
     # Embeddings
     model = SentenceTransformer(SBERT_MODEL)
@@ -57,7 +68,10 @@ def main() -> None:
     )
     np.save(ART_DIR / "sbert_embeddings.npy", embs)
 
-    # Mapping parquet (com URLs)
+    # Sanity-check de alinhamento
+    assert len(map_df) == embs.shape[0], f"Linhas mapping ({len(map_df)}) != embeddings ({embs.shape[0]})"
+
+    # Mapping parquet (com URLs e user_id)
     map_df.to_parquet(MAPPING_PARQUET, index=False)
 
 if __name__ == "__main__":

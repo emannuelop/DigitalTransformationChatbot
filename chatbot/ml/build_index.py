@@ -14,7 +14,7 @@ def main():
     assert len(df) == embs.shape[0], f"Linhas mapping ({len(df)}) != embeddings ({embs.shape[0]})"
 
     dim = embs.shape[1]
-    faiss.normalize_L2(embs)                    # deixa unit-norm (para IP ~ cos)
+    faiss.normalize_L2(embs)                    # unit-norm (IP ~ cos)
     index = faiss.IndexFlatIP(dim)
     index.add(embs.astype(np.float32))
 

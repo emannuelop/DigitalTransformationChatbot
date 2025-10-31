@@ -118,11 +118,13 @@ def ensure_table(conn: sqlite3.Connection) -> None:
             soft_score INTEGER,
             content TEXT,
             content_type TEXT,
-            fetched_at TEXT
+            fetched_at TEXT,
+            user_id INTEGER -- NULL para documentos globais (scraping), ID para documentos de usuário
         )
         """
     )
     cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_url ON documents(url)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents(user_id)")
     conn.commit()
 
 def init_db(path: str) -> sqlite3.Connection:
@@ -136,12 +138,12 @@ def doc_exists(conn: sqlite3.Connection, url: str) -> bool:
     return cur.fetchone() is not None
 
 def save_document(conn: sqlite3.Connection, url: str, title: str,
-                  num_pages: int, wc: int, sscore: int, content: str) -> None:
+                  num_pages: int, wc: int, sscore: int, content: str, user_id: int | None = None) -> None:
     cur = conn.cursor()
     cur.execute(
         """
-        INSERT INTO documents (url, title, num_pages, word_count, soft_score, content, content_type, fetched_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'pdf', ?)
+        INSERT INTO documents (url, title, num_pages, word_count, soft_score, content, content_type, fetched_at, user_id)
+        VALUES (?, ?, ?, ?, ?, ?, 'pdf', ?, ?)
         ON CONFLICT(url) DO UPDATE SET
           title=excluded.title,
           num_pages=excluded.num_pages,
@@ -149,9 +151,10 @@ def save_document(conn: sqlite3.Connection, url: str, title: str,
           soft_score=excluded.soft_score,
           content=excluded.content,
           content_type='pdf',
-          fetched_at=excluded.fetched_at
+          fetched_at=excluded.fetched_at,
+          user_id=excluded.user_id
         """,
-        (url, title or None, num_pages, wc, sscore, content, datetime.now(timezone.utc).isoformat()),
+        (url, title or None, num_pages, wc, sscore, content, datetime.now(timezone.utc).isoformat(), user_id),
     )
     conn.commit()
 
@@ -276,7 +279,8 @@ def process_pdf(session: requests.Session, conn: sqlite3.Connection, url: str) -
         print(f"[SKIP] PDF filtrado por conteúdo (wc={wc}, score={sscore}): {url}")
         return
 
-    save_document(conn, url, title, num_pages, wc, sscore, text)
+    # Documentos do scraping são globais, user_id=None
+    save_document(conn, url, title, num_pages, wc, sscore, text, user_id=None)
     print(f"[OK] Salvo (pgs={num_pages} | wc={wc} | score={sscore}): {url}")
 
 def crawl_pdf_only_pt(seeds: list[str]) -> None:

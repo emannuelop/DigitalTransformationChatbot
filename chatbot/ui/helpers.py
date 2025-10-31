@@ -152,16 +152,16 @@ except Exception:
 def cached_search_handles():
     return load_search()
 
-def call_rag(question: str) -> Tuple[str, List[str], str | None]:
+def call_rag(question: str, user_id: int) -> Tuple[str, List[str], str | None]:
     urls, debug = [], None
     try:
         index, mapping = cached_search_handles()
-        ctx = search(index, mapping, question, k=cfg.TOP_K)
+        ctx = search(index, mapping, question, user_id=user_id, k=cfg.TOP_K)
         urls = unique_urls_in_order(ctx, limit=5)
     except Exception as e:
         debug = f"Falha ao recuperar fontes: {e}"
     try:
-        out = rag_pipeline.answer_with_cfg(question, gen_overrides=None, k=cfg.TOP_K)
+        out = rag_pipeline.answer_with_cfg(question, user_id=user_id, gen_overrides=None, k=cfg.TOP_K)
         answer_text = out[0] if isinstance(out, tuple) else out
         if not isinstance(answer_text, str):
             answer_text = str(answer_text)
@@ -174,8 +174,9 @@ def send_and_respond(user: dict, question: str):
     ss = st.session_state
     db.save_message(user["id"], "user", question, chat_id=ss["selected_chat_id"])
     ss["messages"].append({"role": "user", "text": question, "urls": []})
+    user_id = user["id"]
     with st.spinner("Consultando base e gerando resposta..."):
-        answer_text, urls, debug = call_rag(question)
+        answer_text, urls, debug = call_rag(question, user_id)
     ss["messages"].append({"role": "assistant", "text": answer_text, "urls": urls})
     db.save_message(user["id"], "assistant", answer_text, chat_id=ss["selected_chat_id"], urls=urls)
 

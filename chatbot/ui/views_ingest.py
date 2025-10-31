@@ -44,11 +44,13 @@ def ingest_screen(user: dict):
         for f in pdf_files or []:
             uploads.append((f.name, f.read()))
 
+        user_id = user["id"] # Obtém o ID do usuário logado
+
         with st.status("Processando fontes…", expanded=True) as status:
             status.write("➊ Gravando uploads (se houver) e processando links…")
             try:
                 from chatbot.ingestion import ingest_and_index
-                result = ingest_and_index(url_list=urls, pdf_files=uploads)
+                result = ingest_and_index(user_id=user_id, url_list=urls, pdf_files=uploads)
             except Exception as e:
                 status.update(label="Falha no pipeline 😵", state="error")
                 st.exception(e)
@@ -81,7 +83,8 @@ def ingest_screen(user: dict):
     st.subheader("Minhas fontes")
     try:
         from chatbot.ingestion import list_sources, rename_source, delete_source
-        sources = list_sources()
+        user_id = user["id"]
+        sources = list_sources(user_id)
     except Exception as e:
         st.error(f"Falha ao carregar fontes: {e}")
         return
@@ -121,7 +124,7 @@ def ingest_screen(user: dict):
                     if st.button("Salvar nome", key=f"save_{src['doc_id']}", use_container_width=True):
                         try:
                             status_ph.info("Renomeando…")
-                            rename_source(int(src["doc_id"]), new_name)
+                            rename_source(user["id"], int(src["doc_id"]), new_name)
                             status_ph.success("Nome atualizado ✅")
                             time.sleep(0.35)
                             st.rerun()
@@ -132,7 +135,7 @@ def ingest_screen(user: dict):
                     if st.button("Excluir", key=f"del_{src['doc_id']}", use_container_width=True):
                         try:
                             status_ph.info("Excluindo e atualizando índice…")
-                            delete_source(int(src["doc_id"]), reindex=True)
+                            delete_source(user["id"], int(src["doc_id"]), reindex=True)
                             # Limpa caches para refletir imediatamente no chat
                             try:
                                 st.cache_resource.clear()

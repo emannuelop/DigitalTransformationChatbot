@@ -62,9 +62,9 @@ SYS_PT_USER = (
     "Use APENAS o conteúdo do CONTEXTO fornecido (não use conhecimento externo). "
     f"Se o contexto não suportar, responda exatamente: '{NOT_FOUND_TEXT}'. "
     "Formato da resposta:\n"
-    "1) Responda de forma direta em 2–3 frases.\n"
-    "2) Pontos-chave em bullets (3–6 itens) quando fizer sentido.\n"
-    "3) Em resumo: 1 frase final iniciando com 'Em resumo,'\n"
+    "1) Responda de forma direta e completa.\n"
+    "2) Use bullets quando apropriado para organizar informações.\n"
+    "3) Seja claro e objetivo.\n"
     f"Finalize com {ANSWER_SENTINEL} e nada após ele."
 )
 
@@ -115,16 +115,45 @@ def _lex_overlap(query: str, text: str) -> float:
     hits = sum(1 for w in qk if w in t_norm)
     return hits / max(1, len(qk))
 
-def search(index, mapping: pd.DataFrame, query_text: str, k: int = TOP_K) -> pd.DataFrame:
+# --- SUBSTITUIR A FUNÇÃO search(...) ---
+def search(index, mapping: pd.DataFrame, query_text: str, user_id: int | None = None, k: int = TOP_K) -> pd.DataFrame:
     q = _encode([query_text])
-    D, I = index.search(q, max(k, 10))
-    hits = mapping.iloc[I[0]].copy()
-    hits["score_vec"] = D[0].astype(float)
+    D, I = index.search(q, max(k, 100))
 
+    faiss_results = pd.DataFrame({'faiss_id': I[0], 'score_vec': D[0]})
+    hits = faiss_results.merge(mapping, left_on='faiss_id', right_index=True, how='left')
+
+    # 1) Filtro base por usuário:
+    if user_id is not None:
+        # documentos globais (user_id NULL) OU do próprio usuário
+        hits = hits[hits["user_id"].isna() | (hits["user_id"] == user_id)]
+    else:
+        hits = hits[hits["user_id"].isna()]
+
+    if hits.empty:
+        return hits.reset_index(drop=True)
+
+    # 2) Filtro anti-vazamento (se URL foi reclamado por QUALQUER usuário
+    #    e não é do usuário atual, não pode aparecer como "global"):
+    urls_in_hits = [str(u) for u in hits["url"].fillna("").tolist() if u]
+    claimed_any = _urls_claimed_by_any_user(urls_in_hits)
+    mine_urls = _user_source_urls(urls_in_hits, user_id) if user_id is not None else set()
+    forbidden_globals = claimed_any - mine_urls
+
+    if forbidden_globals:
+        hits = hits[~(hits["user_id"].isna() & hits["url"].isin(forbidden_globals))]
+
+    if hits.empty:
+        return hits.reset_index(drop=True)
+
+    # 3) Scoring e corte
+    hits = hits.sort_values("score_vec", ascending=False).head(k).copy()
+    hits["score_vec"] = hits["score_vec"].astype(float)
     hits = hits[hits["score_vec"] >= float(SCORE_CUTOFF)]
     if hits.empty:
         return hits.reset_index(drop=True)
 
+    # 4) Híbrido
     smin, smax = float(hits["score_vec"].min()), float(hits["score_vec"].max())
     denom = (smax - smin) or 1.0
     hits["score_vec_n"] = (hits["score_vec"] - smin) / denom
@@ -139,27 +168,72 @@ def search(index, mapping: pd.DataFrame, query_text: str, k: int = TOP_K) -> pd.
     )
     return hits
 
+
 # -------------------- Detectar URLs de uploads do usuário --------------------
-def _user_source_urls(urls: list[str]) -> set[str]:
+# --- SUBSTITUIR ESTA FUNÇÃO ---
+def _user_source_urls(urls: list[str], user_id: int | None = None) -> set[str]:
     """
-    Consulta o DB de scraping e retorna o subconjunto de URLs que pertencem a user_sources.
-    Usa o mesmo caminho que a UI usa para rotular PDFs do usuário.
+    Retorna o subconjunto de URLs (dentro de `urls`) que pertencem ao usuário `user_id`
+    segundo a tabela user_sources. Usa o vínculo us.user_id (correto para posse).
     """
+    if not urls or user_id is None:
+        return set()
+
     try:
-        from chatbot.extraction.scraping import DB_PATH  # mesmo ponto usado na UI
+        from chatbot.extraction.scraping import DB_PATH
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
+
         placeholders = ",".join(["?"] * len(urls))
-        rows = conn.execute(f"""
+        rows = conn.execute(
+            f"""
             SELECT d.url
             FROM user_sources us
             JOIN documents d ON d.id = us.doc_id
             WHERE d.url IN ({placeholders})
-        """, urls).fetchall()
+              AND us.user_id = ?
+            """,
+            urls + [user_id],
+        ).fetchall()
         conn.close()
         return {r["url"] for r in rows}
-    except Exception:
+    except Exception as e:
+        import sys
+        print(f"[DEBUG] Erro em _user_source_urls: {e}", file=sys.stderr)
         return set()
+    
+# --- ADICIONAR ESTA NOVA FUNÇÃO ---
+def _urls_claimed_by_any_user(urls: list[str]) -> set[str]:
+    """
+    Retorna o subconjunto de URLs (dentro de `urls`) que constam em user_sources para QUALQUER usuário.
+    Serve para impedir que um URL 'global' (user_id = NULL no Parquet) vaze se ele já foi
+    anexado por algum usuário específico.
+    """
+    if not urls:
+        return set()
+
+    try:
+        from chatbot.extraction.scraping import DB_PATH
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+
+        placeholders = ",".join(["?"] * len(urls))
+        rows = conn.execute(
+            f"""
+            SELECT DISTINCT d.url
+            FROM user_sources us
+            JOIN documents d ON d.id = us.doc_id
+            WHERE d.url IN ({placeholders})
+            """,
+            urls,
+        ).fetchall()
+        conn.close()
+        return {r["url"] for r in rows}
+    except Exception as e:
+        import sys
+        print(f"[DEBUG] Erro em _urls_claimed_by_any_user: {e}", file=sys.stderr)
+        return set()
+
 
 # -------------------- Prompt helpers --------------------
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
@@ -174,6 +248,9 @@ def _strip_meta_prefixes(text: str) -> str:
     t = re.sub(r"^(responda em pt[- ]?br\.?\s*)", "", t, flags=re.I)
     t = re.sub(r"^(responda em português.*?\s*)", "", t, flags=re.I)
     t = re.sub(r"^(instruções:\s*)", "", t, flags=re.I)
+    # Remove prefixos de continuação que o modelo gera incorretamente
+    t = re.sub(r"^(continuando a resposta.*?:\s*)", "", t, flags=re.I)
+    t = re.sub(r"^(continuando.*?:\s*)", "", t, flags=re.I)
     return t.lstrip()
 
 def _estimate_tokens(question: str, blocks: list[str]) -> int:
@@ -202,15 +279,32 @@ def _build_prompt(question: str, contexts: pd.DataFrame) -> tuple[str, list[str]
     return user_prompt, urls, blocks
 
 def _needs_continuation_dyn(text: str, min_len: int) -> bool:
-    # Continua enquanto NÃO houver sentinela OU enquanto não atingiu o mínimo exigido
-    if len(text) < min_len:
-        return True
-    return (ANSWER_SENTINEL not in text) and (not text.rstrip().endswith((".", "!", "?", ".”", "”")))
+    """
+    Critério mais rigoroso para evitar loops desnecessários.
+    Só continua se:
+    1. Não tem a sentinela E
+    2. Não termina com pontuação adequada E
+    3. Está MUITO abaixo do mínimo (< 70% do mínimo)
+    """
+    # Se tem sentinela, nunca continua
+    if ANSWER_SENTINEL in text:
+        return False
+    
+    # Se termina com pontuação adequada e tem pelo menos 70% do mínimo, não continua
+    if text.rstrip().endswith((".", "!", "?", "."", """)):
+        if len(text) >= (min_len * 0.7):
+            return False
+    
+    # Só continua se está muito abaixo do mínimo
+    return len(text) < (min_len * 0.7)
 
 def _strip_sentinel(text: str) -> str:
     return text.replace(ANSWER_SENTINEL, "").strip()
 
 def _context_is_relevant(question: str, blocks: list[str]) -> bool:
+    """
+    Verifica se o contexto recuperado é lexicalmente relevante para a pergunta.
+    """
     q_tokens_all = [t for t in _words(question) if t not in STOPWORDS]
     q_keys = [t for t in q_tokens_all if len(t) >= KEYWORD_MIN_LEN]
     if not q_keys:
@@ -225,12 +319,27 @@ def _context_is_relevant(question: str, blocks: list[str]) -> bool:
     return key_hits >= KEYWORD_MIN_HITS or phrase_hit
 
 def _answer_covered_by_context(answer: str, blocks: list[str], min_cov: float) -> bool:
-    ans_keys = set(_keywords(answer))
+    """
+    Verifica cobertura de forma mais permissiva.
+    Aceita palavras parciais e variações.
+    """
+    ans_keys = set(_keywords(answer, min_len=4))  # Reduz min_len de 5 para 4
     if not ans_keys:
-        return False
+        return True  # Se não há keywords, aceita (evita rejeição por falta de palavras-chave)
+    
     ctx_text = _normalize(" ".join(blocks))
-    covered = sum(1 for t in ans_keys if t in ctx_text)
-    return (covered / max(1, len(ans_keys))) >= min_cov
+    
+    # Conta matches exatos
+    covered_exact = sum(1 for t in ans_keys if t in ctx_text)
+    
+    # Conta matches parciais (substring)
+    covered_partial = sum(1 for t in ans_keys if any(t in word or word in t for word in ctx_text.split()))
+    
+    # Usa o maior dos dois
+    covered = max(covered_exact, covered_partial)
+    
+    coverage = covered / max(1, len(ans_keys))
+    return coverage >= min_cov
 
 def _is_degenerate_yesno(s: str) -> bool:
     t = (s or "").strip().lower()
@@ -240,6 +349,7 @@ def _is_degenerate_yesno(s: str) -> bool:
 # -------------------- Geração com LLM --------------------
 def answer_with_cfg(
     question: str,
+    user_id: int | None = None,
     gen_overrides: dict | None = None,
     k: int | None = None,
     handles: tuple | None = None,
@@ -255,13 +365,14 @@ def answer_with_cfg(
         index, mapping = handles
 
     # Busca
-    ctx = search(index, mapping, question, k=k)
+    ctx = search(index, mapping, question, user_id=user_id, k=k)
     if ctx is None or ctx.empty:
         return NOT_FOUND_TEXT, [], "Gate1: nenhum contexto acima do cutoff."
 
-    # Descobrir se há fontes do usuário
+    # Descobrir se há fontes do usuário DESTE USUÁRIO ESPECÍFICO
     all_urls = [str(u) for u in ctx["url"].fillna("").tolist()]
-    user_urls = _user_source_urls([u for u in all_urls if u])
+    # CORRIGIDO: Passa user_id para filtrar corretamente
+    user_urls = _user_source_urls([u for u in all_urls if u], user_id=user_id)
     has_user_ctx = bool(user_urls)
 
     # Se houver fontes do usuário, restringe o contexto só a elas
@@ -281,10 +392,19 @@ def answer_with_cfg(
     # Mínimo dinâmico de caracteres
     min_len_required = (MIN_GENERATION_CHARS_USER if use_user_mode else MIN_GENERATION_CHARS)
 
-    # Gate 1.5 — só aplica quando NÃO estamos em modo user-upload
-    #if not use_user_mode:
-    #    if not _context_is_relevant(question, blocks):
-    #       return NOT_FOUND_TEXT, urls, "Gate1.5: contexto recuperado não é lexicalmente relevante para a pergunta."
+# --- SUBSTITUIR O TRECHO "Gate 1.5" DENTRO DE answer_with_cfg(...) POR ESTE ---
+    # NOVO Gate 1.5 — relevância obrigatória no modo global (anti 'Minecraft')
+    if not use_user_mode:
+        top_score = float(ctx.iloc[0].get("score_hybrid", 0.0)) if not ctx.empty else 0.0
+        is_relevant = _context_is_relevant(question, blocks)
+
+        # Se a base recuperada não tem relevância lexical suficiente, corta logo.
+        if not is_relevant:
+            return NOT_FOUND_TEXT, [], f"Gate1.5: contexto sem relevância lexical (score={top_score:.3f})"
+
+        # Se o score for MUITO baixo, corta também.
+        if top_score < 0.25:
+            return NOT_FOUND_TEXT, [], f"Gate1.5: score muito baixo ({top_score:.3f})"
 
     # Config de geração
     need_tokens = _estimate_tokens(question, blocks)
@@ -333,16 +453,18 @@ def answer_with_cfg(
     history_text = text
     rounds = 0
 
+    # Lógica de continuação mais conservadora
     def _continuation_prefix() -> str:
         return (
-            f"{user_prompt}\n\n"
-            f"Texto já gerado (não repita):\n{history_text}\n\n"
-            "CONTINUE do ponto em que parou, mantendo o mesmo tom e formato, "
-            "usando SOMENTE o contexto acima. "
-            f"Finalize com {ANSWER_SENTINEL} e nada após."
+            f"Pergunta: {question}\n\n"
+            f"Contexto:\n{chr(10).join(blocks)}\n\n"
+            f"Resposta parcial já gerada:\n{history_text}\n\n"
+            "Complete a resposta acima de forma natural, adicionando informações relevantes do contexto. "
+            "NÃO repita o que já foi dito. "
+            f"Finalize com {ANSWER_SENTINEL}."
         )
 
-    # >>> usa o verificador dinâmico para continuar até atingir o mínimo
+    # Usa o verificador dinâmico para continuar com critério mais rigoroso
     while _needs_continuation_dyn(history_text, min_len_required) and rounds < CONTINUE_MAX_ROUNDS:
         rounds += 1
         follow = _continuation_prefix()
@@ -352,6 +474,19 @@ def answer_with_cfg(
             break
         extra = _strip_think(extra).strip()
         extra = _strip_meta_prefixes(extra)
+        
+        # Verifica se a continuação é válida (não é repetição)
+        if not extra or extra in history_text:
+            break
+        
+        # Verifica se começou a repetir
+        if extra.startswith(history_text[:100]):
+            break
+            
+        # Verifica se tem o padrão de repetição problemático
+        if "continuando a resposta" in extra.lower():
+            break
+        
         if extra and extra not in history_text:
             if extra.startswith(history_text[:200]):
                 extra = extra[len(history_text):].lstrip()
@@ -363,19 +498,30 @@ def answer_with_cfg(
 
     # Gate 3 — cobertura (limiar depende do modo) e comprimento dinâmico
     cov_min = MIN_ANSWER_COVERAGE_USER if use_user_mode else MIN_ANSWER_COVERAGE
-    if not final_text or len(final_text) < min_len_required:
-        return NOT_FOUND_TEXT, urls, f"Gate3: resposta curta/ausente. min={min_len_required}"
-    if not _answer_covered_by_context(final_text, blocks, cov_min):
-        top_hybrid = float(ctx.iloc[0].get("score_hybrid", 0.0))
-        top_vec = float(ctx.iloc[0].get("score_vec", 0.0))
-        top_lex = float(ctx.iloc[0].get("score_lex", 0.0))
-        return NOT_FOUND_TEXT, urls, (
-            f"Gate3: resposta não coberta pelo contexto. "
-            f"top_hybrid={top_hybrid:.3f} top_vec={top_vec:.3f} top_lex={top_lex:.3f} "
-            f"min_coverage={cov_min:.2f} (user_mode={use_user_mode})"
-        )
+    
+    # Verifica comprimento mínimo
+    if not final_text or len(final_text) < (min_len_required * 0.5):
+        return NOT_FOUND_TEXT, urls, f"Gate3: resposta curta/ausente. min={min_len_required}, got={len(final_text)}"
+    
+    # Gate de cobertura mais permissivo para user_mode
+    if use_user_mode:
+        # Para PDFs do usuário, apenas verifica se há ALGUMA cobertura
+        if not _answer_covered_by_context(final_text, blocks, cov_min):
+            # Log mas não rejeita automaticamente
+            debug_reason = f"Baixa cobertura em user_mode (cov_min={cov_min}), mas aceitando resposta."
+    else:
+        # Para conteúdo global, mantém verificação mais rigorosa
+        if not _answer_covered_by_context(final_text, blocks, cov_min):
+            top_hybrid = float(ctx.iloc[0].get("score_hybrid", 0.0))
+            top_vec = float(ctx.iloc[0].get("score_vec", 0.0))
+            top_lex = float(ctx.iloc[0].get("score_lex", 0.0))
+            return NOT_FOUND_TEXT, urls, (
+                f"Gate3: resposta não coberta pelo contexto. "
+                f"top_hybrid={top_hybrid:.3f} top_vec={top_vec:.3f} top_lex={top_lex:.3f} "
+                f"min_coverage={cov_min:.2f} (user_mode={use_user_mode})"
+            )
 
     if final_text.strip() == NOT_FOUND_TEXT:
         return NOT_FOUND_TEXT, urls, "Modelo devolveu sentinel de não encontrado."
 
-    return final_text, urls, ""
+    return final_text, urls, debug_reason

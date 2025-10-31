@@ -78,7 +78,7 @@ def _purge_orphans_in_processed() -> None:
                                  ((i, i) for i in to_drop))
             proc.commit()
 
-def ingest_and_index(url_list=None, pdf_files=None) -> Dict[str, Any]:
+def ingest_and_index(user_id: int, url_list=None, pdf_files=None) -> Dict[str, Any]:
     """
     1) adiciona PDFs/URLs SEM FILTROS ao DB bruto (e registra em user_sources)
     2) roda processor -> embedder -> build_index
@@ -88,11 +88,11 @@ def ingest_and_index(url_list=None, pdf_files=None) -> Dict[str, Any]:
     out_msgs: List[str] = []
     added_items: List[Dict[str, Any]] = []
 
-    up = ingest_uploaded_pdfs_unfiltered(pdf_files)
+    up = ingest_uploaded_pdfs_unfiltered(user_id, pdf_files)
     out_msgs += up.get("messages", [])
     added_items += up.get("items", [])
 
-    se = ingest_urls_unfiltered(url_list)
+    se = ingest_urls_unfiltered(user_id, url_list)
     out_msgs += se.get("messages", [])
     added_items += se.get("items", [])
 
@@ -108,19 +108,19 @@ def ingest_and_index(url_list=None, pdf_files=None) -> Dict[str, Any]:
 
 # ----------------------- API para a UI (gerenciamento) -----------------------
 
-def list_sources() -> List[Dict[str, Any]]:
-    return list_user_sources()
+def list_sources(user_id: int) -> List[Dict[str, Any]]:
+    return list_user_sources(user_id)
 
-def rename_source(doc_id: int, new_name: str) -> None:
-    rename_user_source(doc_id, new_name)
+def rename_source(user_id: int, doc_id: int, new_name: str) -> None:
+    rename_user_source(user_id, doc_id, new_name)
 
-def delete_source(doc_id: int, reindex: bool = True) -> None:
+def delete_source(user_id: int, doc_id: int, reindex: bool = True) -> None:
     """
     Exclui a fonte do usuário + documento bruto
     e também limpa o registro correspondente do DB processado.
     Se reindex=True, roda processor->embedder->build_index para refletir no índice.
     """
-    delete_user_source(doc_id)
+    delete_user_source(user_id, doc_id)
     _purge_processed_for(doc_id)      # <— limpa do knowledge_base_processed.db
     _purge_orphans_in_processed()     # <— garantia extra (se algo foi mexido fora)
     if reindex:

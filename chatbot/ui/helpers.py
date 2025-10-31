@@ -9,7 +9,13 @@ import sqlite3
 import streamlit as st
 import json
 
+from chatbot.ml import rag_pipeline as rp
 from . import db
+
+NOT_FOUND_TEXT = getattr(
+    rp, "NOT_FOUND_TEXT",
+    "Não encontrei essa informação na base de conhecimento."
+)
 
 # ---------- Foto do usuário ----------
 def photo_dir() -> Path:
@@ -79,11 +85,13 @@ def _kb_conn() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     return conn
 
-def _lookup_user_labels(urls: List[str]) -> Dict[str, str]:
+# --- nova versão (com filtro por usuário) ---
+def _lookup_user_labels(urls: List[str], user_id: int | None) -> Dict[str, str]:
     """
-    Retorna um mapa url -> display_name (apenas para fontes adicionadas via UI).
+    Retorna url -> display_name SOMENTE das fontes que este usuário anexou (user_sources.user_id = user_id).
+    Evita mostrar o nome do PDF de outra conta mesmo que a URL coincida.
     """
-    if not urls:
+    if not urls or user_id is None:
         return {}
     try:
         conn = _kb_conn()
@@ -93,21 +101,20 @@ def _lookup_user_labels(urls: List[str]) -> Dict[str, str]:
             FROM user_sources us
             JOIN documents d ON d.id = us.doc_id
             WHERE d.url IN ({placeholders})
-        """, urls).fetchall()
+              AND us.user_id = ?
+        """, urls + [user_id]).fetchall()
         conn.close()
         return {r["url"]: r["display_name"] for r in rows}
     except Exception:
         return {}
 
-def unique_urls_in_order(df, limit=5) -> List[str]:
+def unique_urls_in_order(df, limit: int = 5, user_id: int | None = None) -> List[str]:
     """
-    Mantém comportamento antigo (lista de strings), mas,
-    quando a fonte foi adicionada pelo usuário, devolve o NOME do PDF.
+    Igual à anterior, mas garante que só rotulamos com display_name de PDFs do PRÓPRIO usuário.
     """
-    seen, ordered = set(), []
+    seen, raw_urls = set(), []
     if df is None:
-        return ordered
-    raw_urls: List[str] = []
+        return []
     for _, r in df.iterrows():
         u = (r.get("url") or "").strip()
         if u and u not in seen:
@@ -116,14 +123,12 @@ def unique_urls_in_order(df, limit=5) -> List[str]:
         if len(raw_urls) >= limit:
             break
 
-    labels = _lookup_user_labels(raw_urls)
-    pretty: List[str] = []
+    labels = _lookup_user_labels(raw_urls, user_id=user_id)
+    pretty = []
     for u in raw_urls:
         if u in labels:
-            # Cita explicitamente que veio daquele PDF
             pretty.append(f"{labels[u]} — fonte (PDF)")
         else:
-            # URL da web continua como link
             pretty.append(u)
     return pretty
 
@@ -153,21 +158,48 @@ def cached_search_handles():
     return load_search()
 
 def call_rag(question: str, user_id: int) -> Tuple[str, List[str], str | None]:
-    urls, debug = [], None
+    # Não monte fontes ainda; só recupere o contexto
+    urls: List[str] = []
+    debug: str | None = None
+    ctx = None
     try:
         index, mapping = cached_search_handles()
         ctx = search(index, mapping, question, user_id=user_id, k=cfg.TOP_K)
-        urls = unique_urls_in_order(ctx, limit=5)
     except Exception as e:
-        debug = f"Falha ao recuperar fontes: {e}"
+        debug = f"Falha ao recuperar contexto: {e}"
+        ctx = None
+
+    # Geração com os gates do pipeline
     try:
-        out = rag_pipeline.answer_with_cfg(question, user_id=user_id, gen_overrides=None, k=cfg.TOP_K)
-        answer_text = out[0] if isinstance(out, tuple) else out
-        if not isinstance(answer_text, str):
-            answer_text = str(answer_text)
+        out = rag_pipeline.answer_with_cfg(
+            question, user_id=user_id, gen_overrides=None, k=cfg.TOP_K
+        )
+        if isinstance(out, tuple):
+            answer_text = out[0] if len(out) > 0 else ""
+            # out[1] são URLs brutas do pipeline (opcional); out[2] é o motivo/debug
+            if len(out) > 2 and out[2]:
+                debug = f"{debug + chr(10) if debug else ''}{out[2]}".strip()
+        else:
+            answer_text = str(out or "")
     except Exception as e:
-        debug = f"{debug or ''}\n{e}".strip()
+        # Erro na geração: devolva sem fontes
         answer_text = "Tive um problema para gerar a resposta agora. Tente novamente em instantes."
+        return answer_text, [], f"{debug + chr(10) if debug else ''}{e}".strip()
+
+    # Só mostre fontes se a resposta for válida (nem NOT_FOUND, nem msg de erro)
+    bad = (
+        not answer_text
+        or answer_text.strip() == NOT_FOUND_TEXT
+        or answer_text.startswith("Tive um problema")
+    )
+    if bad:
+        return answer_text, [], debug
+
+    # Resposta válida → derive as fontes do contexto final
+    if ctx is not None and hasattr(ctx, "empty") and not ctx.empty:
+        urls = unique_urls_in_order(ctx, limit=5, user_id=user_id)
+    else:
+        urls = []
     return answer_text, urls, debug
 
 def send_and_respond(user: dict, question: str):

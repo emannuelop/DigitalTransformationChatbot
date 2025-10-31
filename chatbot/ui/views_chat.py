@@ -3,6 +3,7 @@ import streamlit as st
 from .helpers import send_and_respond, ensure_chat_selected
 from .styles import inject_base_css
 from . import db
+from html import escape
 
 # ---------------------------------------------
 # SUGESTÕES PADRÃO (mostradas apenas em chat novo)
@@ -70,12 +71,17 @@ def chat_screen(user: dict):
 
     # Estado vazio (chat novo)
     if not ss["messages"]:
+        # Monta o título com o primeiro nome do usuário; fallback para "você"
+        raw_name = (user.get("name") or "").strip()
+        first_name = escape(raw_name).split()[0] if raw_name else "você"
+        hero_title = f"Olá, {first_name}"
+
         st.markdown(
-            """
+            f"""
             <div class="hero-wrap">
               <div class="hero">
-                <h1>O que quer fazer hoje?</h1>
-                <p>Pergunte sobre transformação digital coisa ou escolha uma sugestão abaixo.</p>
+                <h1>{hero_title}</h1>
+                <p>Pergunte sobre transformação digital ou escolha uma sugestão abaixo.</p>
               </div>
             </div>
             """,

@@ -13,7 +13,7 @@ def render_sidebar(user: dict) -> None:
         inject_base_css()  # tema + ajustes
 
                 # --- PESQUISAR CHAT (fica acima de "Novo chat") ---
-        with st.popover("🔎 Pesquisar chat", use_container_width=True):
+        with st.popover("🔎 Procurar chats", use_container_width=True):
             # Wrapper p/ CSS
             st.markdown('<div class="sb-search">', unsafe_allow_html=True)
 
@@ -44,7 +44,7 @@ def render_sidebar(user: dict) -> None:
 
 
         # Novo chat
-        if st.button("Novo chat", use_container_width=True):
+        if st.button("➕ Novo chat", use_container_width=True):
             cid = db.create_chat(user["id"], "Novo chat")
             st.session_state["selected_chat_id"] = cid
             st.session_state["messages"].clear()

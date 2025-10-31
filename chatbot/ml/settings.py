@@ -26,16 +26,16 @@ TOP_K: int          = 6
 SCORE_CUTOFF: float = 0.30  # ↑ mais estrito
 
 # Reranking híbrido (vetorial + léxico)
-HYBRID_LAMBDA: float = 0.25  # 0 = só vetorial; 1 = só léxico
+HYBRID_LAMBDA: float = 0.30  # 0 = só vetorial; 1 = só léxico
 
 # LM Studio
 LMSTUDIO_HOST: str  = "http://127.0.0.1:1234"
 LMSTUDIO_MODEL: str = "ibm/granite-4-h-tiny"
 
 # Geração (mais determinística para respostas consistentes)
-GEN_TEMPERATURE: float = 0.05
-GEN_TOP_P: float       = 0.75
-GEN_MAX_TOKENS: int    = 1024
+GEN_TEMPERATURE: float = 0.15
+GEN_TOP_P: float       = 0.85
+GEN_MAX_TOKENS: int    = 1400
 GEN_TIMEOUT_S: int     = 240
 GEN_RETRIES: int       = 2
 GEN_BACKOFF_S: float   = 1.5
@@ -53,7 +53,7 @@ FORCE_PT_BR: bool = False
 # Controle de resposta
 ANSWER_SENTINEL: str      = "<FIM/>"
 CONTINUE_MAX_ROUNDS: int  = 3
-MIN_GENERATION_CHARS: int = 500            # padrão (domínio transformação digital)
+MIN_GENERATION_CHARS: int = 650            # padrão (domínio transformação digital)
 MIN_GENERATION_CHARS_USER: int = 180       # mínimo mais curto para PDF do usuário
 
 # Judge (desligado)

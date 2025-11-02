@@ -179,9 +179,6 @@ def deduplicate(df_clean: pd.DataFrame, sim_threshold: float = 0.92) -> Tuple[pd
     dup_map = pd.DataFrame(dup_rows, columns=["original_id", "kept_original_id"])
     return df_final, dup_map
 
-# REMOVIDO: build_tfidf() - não é usado no RAG
-# O TF-IDF é usado apenas internamente na função deduplicate() acima
-
 def build_sbert(df: pd.DataFrame, model_name: str, batch: int = 32) -> None:
     """
     Gera embeddings SBERT (usado no RAG).

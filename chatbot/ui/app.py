@@ -16,7 +16,7 @@ from chatbot.ui.views_chat import chat_screen
 from chatbot.ui.views_profile import profile_screen
 
 # ---------- Config ----------
-st.set_page_config(page_title="Chatbot • RAG", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="Chatbot", page_icon="🤖", layout="wide")
 db.init_db()
 
 # ---------- Estado ----------

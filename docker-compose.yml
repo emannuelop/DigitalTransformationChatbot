@@ -1,0 +1,18 @@
+# docker-compose.yml (Versão simplificada)
+version: '3.8'
+
+services:
+  # O microserviço de Ingestão (FastAPI)
+  ingestion-api:
+    build:
+      context: .
+      dockerfile: ingestion_api/Dockerfile
+    ports:
+      - "8000:8000" # Expõe a API no localhost:8000
+    volumes:
+      # Compartilha os bancos de dados e artefatos
+      - ./chatbot/data:/app/chatbot/data
+      - ./chatbot/extraction/data:/app/chatbot/extraction/data
+    environment:
+      # Garante que os imports do python funcionem
+      PYTHONPATH: /app

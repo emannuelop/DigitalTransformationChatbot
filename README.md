@@ -47,9 +47,12 @@ python run_project.py
 
 ### 3 Acessar a interface
 
-    http://localhost:8501
+```bash
+http://localhost:8501
+```
 
 ## 👨‍💻 Autores
 
-|<img src="imagens/emannuel.png" width=115><br><sub>Emannuel Oliveira</sub> |
-| :---: |
+| ![Emannuel Oliveira](imagens/emannuel.png) |
+| :--: |
+| *Emannuel Oliveira* |

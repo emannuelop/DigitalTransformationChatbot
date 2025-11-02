@@ -53,6 +53,8 @@ http://localhost:8501
 
 ## 👨‍💻 Autores
 
-| ![Emannuel Oliveira](imagens/emannuel.png) |
-| :--: |
-| *Emannuel Oliveira* |
+<!-- markdownlint-capture -->
+<!-- markdownlint-disable MD033 MD045 MD047 -->
+
+| <img src="imagens/emannuel.png" alt="Foto de Emannuel Oliveira" width="115"><br><sub>Emannuel Oliveira</sub> |
+| :---: |

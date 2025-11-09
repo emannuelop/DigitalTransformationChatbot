@@ -59,7 +59,7 @@ SYS_PT_DOMAIN = (
     "3) Exemplos ou indicadores aplicados ao setor público, quando estiverem no CONTEXTO.\n"
     "4) Em resumo: 1 frase iniciando com 'Em resumo,'\n"
 
-    "Na última linha, escreva SOMENTE o sentinela: {ANSWER_SENTINEL}"
+    "Na última linha, escreva SOMENTE o sentinela: '{ANSWER_SENTINEL}'"
 )
 
 # quando o contexto é de PDF enviado pelo usuário → tema livre
